@@ -2,6 +2,7 @@
 """Construye la carpeta estática que GitHub Pages publicará."""
 from pathlib import Path
 import json
+import re
 import shutil
 
 BASE = Path(__file__).resolve().parent
@@ -11,10 +12,12 @@ PUBLIC = BASE / "public"
 def main():
     datos = json.loads((BASE / "datos.json").read_text(encoding="utf-8"))
     html = (BASE / "index.html").read_text(encoding="utf-8")
-    inicio = html.index("const SEMILLA = ")
-    fin = html.index("\n\nconst NAT_COLOR", inicio)
-    semilla = "const SEMILLA = " + json.dumps(datos, ensure_ascii=False, indent=1) + ";"
-    html = html[:inicio] + semilla + html[fin:]
+    semilla = json.dumps(datos, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    patron = r"const FALLBACK=.*?;\nlet D=FALLBACK;"
+    reemplazo = f"const FALLBACK={semilla};\nlet D=FALLBACK;"
+    html, n = re.subn(patron, reemplazo, html, count=1, flags=re.S)
+    if n != 1:
+        raise RuntimeError("No se encontró el bloque FALLBACK en index.html")
 
     if PUBLIC.exists():
         shutil.rmtree(PUBLIC)

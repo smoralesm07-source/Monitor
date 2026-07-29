@@ -73,22 +73,38 @@ TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-
 
 # Conceptos vigilados. Google News recibe además el operador when:30d.
 CONSULTAS_PRENSA = [
-    '"Unidad de Análisis Financiero"',
+    # UAF Chile: se consulta con variantes explícitas y luego se valida contexto chileno.
+    '"Unidad de Análisis Financiero" Chile',
+    '"UAF Chile"',
+    'site:uaf.cl "Unidad de Análisis Financiero"',
+    '"Unidad de Análisis Financiero" "Ley 19.913"',
     'UAF lavado de activos Chile',
+
+    # Dominio LA/FT chileno.
     '"lavado de activos" Chile',
     '"lavado de dinero" Chile',
     '"financiamiento del terrorismo" Chile',
-    '"reporte de operaciones sospechosas"',
+    '"reporte de operaciones sospechosas" Chile',
     '"operaciones sospechosas" Chile',
     '"delitos precedentes" lavado Chile',
-    '"Sistema de Inteligencia Económica" UAF',
+    '"Sistema de Inteligencia Económica" UAF Chile',
     'GAFILAT Chile',
     'GAFI Chile lavado de activos',
-    '"Operación Tokio" Tren de Aragua',
-    '"caso Sartor" formalización',
     'corrupción lavado de activos Chile',
     'narcotráfico lavado de activos Chile',
     'contrabando lavado de activos Chile',
+
+    # Casos y fenómenos.
+    '"Operación Tokio" Tren de Aragua',
+    '"caso Sartor" formalización',
+
+    # Sujetos obligados: regulación, vulneraciones y exposición a LA/FT.
+    '("sujeto obligado" OR "entidad reportante" OR "oficial de cumplimiento") UAF Chile',
+    '(bancos OR fintech OR "medios de pago" OR "transferencia de dinero") (UAF OR "lavado de activos") Chile',
+    '(inmobiliarias OR notarios OR conservadores OR "corredores de propiedades") (UAF OR "lavado de activos") Chile',
+    '(fondos OR corredoras OR seguros OR AFP) (UAF OR "lavado de activos" OR "debida diligencia") Chile',
+    '(casinos OR automotoras OR factoring OR leasing) (UAF OR "lavado de activos") Chile',
+    '("zonas francas" OR aduanas OR joyerías OR "metales preciosos") (UAF OR "lavado de activos") Chile',
 ]
 
 # Solo se muestran redes con acceso automatizado público utilizable.
@@ -200,6 +216,132 @@ ENCUADRE_NUCLEO = ["lavado de activos", "lavado de dinero", "blanqueo", "activos
 MENCION_UAF = ["unidad de análisis financiero", "unidad de analisis financiero",
                r"\buaf\b", "análisis financiero (uaf)"]
 
+# Señales para distinguir la UAF de Chile de unidades homónimas extranjeras.
+MARCADORES_CHILE = [
+    " chile", "chileno", "chilena", "santiago", "ley 19.913", "ley n 19.913",
+    "uaf.cl", "uaf.gob.cl", "moneda 975", "comision para el mercado financiero",
+    " cmf ", "ministerio publico", "fiscalia nacional", "fiscalia regional",
+    "servicio de impuestos internos", " sii ", "pdi", "carabineros",
+    "gafilat chile", "unidad de analisis financiero de chile", "uaf de chile",
+    "uaf chile", "peso chileno", "pesos chilenos", " clp ", "unidad de fomento",
+]
+
+MARCADORES_UAF_EXTRANJERA = [
+    "uaf panama", "uaf de panama", "unidad de analisis financiero de panama",
+    "unidad de analisis financiero panama", "panama", "panameno", "panamena",
+    "uaf peru", "uaf de peru", "unidad de inteligencia financiera del peru", "peru",
+    "uaf paraguay", "seprelad", "paraguay", "uaf ecuador", "ecuador",
+    "unidad de analisis financiero y economico", "uafe", "colombia", "uiaf",
+    "republica dominicana", "uaf republica dominicana", "bolivia", "uif bolivia",
+    "guatemala", "honduras", "el salvador", "costa rica", "nicaragua",
+]
+
+MEDIOS_CHILENOS = [
+    "la tercera", "emol", "el mercurio", "diario financiero", "df mas", "pulso",
+    "biobiochile", "radio bio bio", "cooperativa", "adn radio", "cnn chile",
+    "24 horas", "t13", "tele13", "meganoticias", "chv noticias", "ciper",
+    "el mostrador", "ex-ante", "interferencia", "the clinic", "soychile",
+    "el desconcierto", "la segunda", "lun", "latercera", "fiscalia de chile",
+    "cmf chile", "senado chile",
+]
+
+# Agrupación analítica de las 55 actividades obligadas a reportar a la UAF.
+SUJETOS_OBLIGADOS = {
+    "banca_finanzas": [
+        "banco", "bancos", "institucion financiera", "cooperativa de ahorro",
+        "caja de compensacion", "casa de cambio", "transferencia de dinero",
+        "transporte de valores", "representacion de banco extranjero",
+    ],
+    "mercado_valores_fondos": [
+        "administradora general de fondos", "agf", "fondos mutuos", "fondo de inversion",
+        "corredora de bolsa", "corredor de bolsa", "agente de valores", "bolsa de valores",
+        "securitizacion", "deposito de valores", "mercado de futuro", "mercado de opciones",
+    ],
+    "pensiones_seguros": [
+        "afp", "administradora de fondos de pensiones", "compania de seguros",
+        "compañia de seguros", "aseguradora", "seguro de vida", "mutuo hipotecario",
+    ],
+    "fintech_pagos": [
+        "fintech", "fintec", "medio de pago", "tarjeta de credito", "tarjeta de pago",
+        "iniciacion de pagos", "plataforma de financiamiento colectivo", "crowdfunding",
+        "custodia de instrumentos financieros", "sistema alternativo de transaccion",
+        "billetera digital", "billetera virtual", "proveedor de servicios financieros",
+    ],
+    "inmobiliario_notarial": [
+        "inmobiliaria", "gestion inmobiliaria", "corredor de propiedades",
+        "corredora de propiedades", "notario", "notaria", "conservador de bienes raices",
+        "conservador", "compraventa de inmueble", "mercado inmobiliario",
+    ],
+    "vehiculos_leasing_factoring": [
+        "automotora", "comercializadora de vehiculos", "arriendo de vehiculos",
+        "rent a car", "leasing", "arrendamiento financiero", "factoring", "factoraje",
+    ],
+    "casinos_deporte": [
+        "casino de juego", "casino flotante", "hipodromo", "club de tiro", "club de caza",
+        "club de pesca", "organizacion deportiva profesional", "club de futbol",
+        "sociedad anonima deportiva", "sadp",
+    ],
+    "aduanas_zonas_francas": [
+        "agente de aduana", "aduana", "zona franca", "usuario de zona franca",
+        "sociedad administradora de zona franca", "mercancia", "internacion",
+    ],
+    "metales_joyas_remates": [
+        "joyeria", "joyas", "piedras preciosas", "metales preciosos", "oro",
+        "casa de remate", "martillero", "remate", "subasta",
+    ],
+    "armas": [
+        "fabricacion de armas", "venta de armas", "armeria", "trafico de armas",
+        "municiones", "arsenal",
+    ],
+    "otros_obligados": [
+        "sujeto obligado", "sujetos obligados", "entidad reportante", "entidades reportantes",
+        "oficial de cumplimiento", "reporte de operaciones sospechosas", "reporte ros",
+        "reporte de operaciones en efectivo", "reporte roe",
+    ],
+}
+SUJETO_OBLIGADO_ETIQUETA = {
+    "banca_finanzas": "Banca y servicios financieros",
+    "mercado_valores_fondos": "Mercado de valores y fondos",
+    "pensiones_seguros": "Pensiones, seguros y mutuos",
+    "fintech_pagos": "Fintech y medios de pago",
+    "inmobiliario_notarial": "Inmobiliario, notarios y conservadores",
+    "vehiculos_leasing_factoring": "Vehículos, leasing y factoring",
+    "casinos_deporte": "Casinos, apuestas y deporte profesional",
+    "aduanas_zonas_francas": "Aduanas y zonas francas",
+    "metales_joyas_remates": "Metales, joyas y remates",
+    "armas": "Fabricación y venta de armas",
+    "otros_obligados": "Otros sujetos obligados",
+}
+
+IMPACTO_SUJETO = {
+    "vulneracion_la": [
+        "imputad", "formaliz", "condena", "investigacion penal", "allanamiento",
+        "incaut", "defraud", "estafa", "utilizad para lavar", "canaliz activos",
+        "operacion sospechosa", "querella", "prision preventiva",
+    ],
+    "cambio_regulatorio": [
+        "circular", "normativa", "reglamento", "ley", "entra en vigencia", "modifica",
+        "instruccion", "exigencia", "obligacion", "debida diligencia", "beneficiario final",
+        "persona expuesta politicamente", "pep", "sancion", "fiscalizacion",
+    ],
+    "gestion_cumplimiento": [
+        "oficial de cumplimiento", "programa de cumplimiento", "modelo de prevencion",
+        "reporte de operaciones sospechosas", "ros", "roe", "capacitacion", "prevencion",
+        "conocimiento del cliente", "kyc", "monitoreo transaccional",
+    ],
+    "cambio_industria": [
+        "fusion", "adquisicion", "quiebra", "insolvencia", "ciberataque", "filtracion",
+        "vulneracion", "fraude", "nueva tecnologia", "criptoactivo", "digitalizacion",
+        "riesgo operacional", "mercado", "supervision sectorial",
+    ],
+}
+IMPACTO_SUJETO_ETIQUETA = {
+    "vulneracion_la": "Vinculación o vulneración por LA/FT",
+    "cambio_regulatorio": "Cambio regulatorio o de supervisión",
+    "gestion_cumplimiento": "Gestión de cumplimiento preventivo",
+    "cambio_industria": "Cambio relevante en la industria",
+}
+
 
 TOPICOS = {
     "fiscalizacion": ["fiscaliz", "sancion", "multa", "supervision", "incumplimiento"],
@@ -217,6 +359,12 @@ TOPICOS = {
     "prevencion": ["prevencion", "lavado de activos", "financiamiento del terrorismo", "la/ft"],
     "gestion_uaf": ["director", "cuenta publica", "presupuesto", "dotacion", "capacitacion",
                     "unidad de analisis financiero informa", "uaf publica"],
+    "sujetos_obligados": ["sujeto obligado", "entidad reportante", "oficial de cumplimiento",
+                           "debida diligencia", "beneficiario final", "conocimiento del cliente",
+                           "reporte ros", "reporte roe", "circular 62"],
+    "vulneracion_sectorial": ["banco", "fintech", "inmobiliaria", "notario", "casino",
+                               "automotora", "factoring", "leasing", "corredora de bolsa",
+                               "aseguradora", "zona franca", "joyeria"],
 }
 TOPICO_ETIQUETA = {
     "fiscalizacion": "Fiscalización y sanciones",
@@ -228,6 +376,8 @@ TOPICO_ETIQUETA = {
     "cooperacion": "Cooperación y estándares internacionales",
     "prevencion": "Prevención de LA/FT",
     "gestion_uaf": "Gestión institucional UAF",
+    "sujetos_obligados": "Sujetos obligados y cumplimiento",
+    "vulneracion_sectorial": "Vulneración de industrias supervisadas",
     "otros": "Otros asuntos UAF/LAFT",
 }
 
@@ -355,9 +505,11 @@ def lee_rss(url, origen):
 
         # Google News antepone el medio tras " - " al final del título
         medio = ""
+        fuente_url = ""
         fuente = item.find("source")
         if fuente is not None and fuente.text:
             medio = fuente.text.strip()
+            fuente_url = (fuente.get("url") or "").strip()
         elif " - " in titulo:
             titulo, medio = titulo.rsplit(" - ", 1)
 
@@ -368,6 +520,7 @@ def lee_rss(url, origen):
             "resumen": limpia_html(campo("description"))[:600],
             "fecha_dt": parsea_fecha(campo("pubDate")),
             "origen": origen,
+            "fuente_url": fuente_url,
         })
     return salida
 
@@ -472,6 +625,63 @@ def clasifica_tipo_medio(medio):
     return "otro"
 
 
+def _marcadores_presentes(texto, marcadores):
+    encontrados = []
+    for marcador in marcadores:
+        m = normaliza(marcador)
+        if not m:
+            continue
+        if len(m) <= 5 and " " not in m:
+            coincide = re.search(r"\b" + re.escape(m) + r"\b", texto) is not None
+        else:
+            coincide = m in texto
+        if coincide:
+            encontrados.append(marcador)
+    return encontrados
+
+
+def analiza_uaf_chile(reg):
+    """Determina si una mención corresponde específicamente a la UAF de Chile.
+
+    Se prioriza precisión: una mención ambigua a «UAF» solo se acepta cuando existe
+    una señal chilena en el texto o el medio. Las UAF extranjeras se excluyen salvo
+    que el artículo también trate explícitamente a Chile.
+    """
+    texto = normaliza(reg.get("titulo", "") + " " + reg.get("resumen", ""))
+    medio = normaliza(reg.get("medio", ""))
+    fuente_url = normaliza(reg.get("fuente_url", "") + " " + reg.get("link", ""))
+    if not contiene(texto, MENCION_UAF):
+        return False, "sin_mencion", []
+
+    chile_texto = _marcadores_presentes(texto, MARCADORES_CHILE)
+    chile_medio = _marcadores_presentes(medio, MEDIOS_CHILENOS)
+    extranjeros = _marcadores_presentes(texto + " " + medio, MARCADORES_UAF_EXTRANJERA)
+
+    exacta = any(x in texto for x in (
+        "unidad de analisis financiero de chile", "uaf de chile", "uaf chile",
+        "unidad de analisis financiero (uaf) de chile",
+    ))
+    institucional = "uaf.cl" in fuente_url or "uaf.gob.cl" in fuente_url
+
+    if extranjeros and not (exacta or chile_texto):
+        return False, "uaf_extranjera", extranjeros[:4]
+    if exacta or institucional:
+        return True, "alta", list(dict.fromkeys(chile_texto + chile_medio + ["mencion_explicitamente_chilena"]))[:5]
+    if chile_texto and chile_medio:
+        return True, "alta", list(dict.fromkeys(chile_texto + chile_medio))[:5]
+    if chile_texto:
+        return True, "media", chile_texto[:5]
+    if chile_medio and not extranjeros:
+        return True, "media", chile_medio[:5]
+    return False, "ambigua", []
+
+
+def clasifica_sujetos_obligados(texto):
+    sectores = [k for k, v in SUJETOS_OBLIGADOS.items() if contiene(texto, v)]
+    impactos = [k for k, v in IMPACTO_SUJETO.items() if contiene(texto, v)] if sectores else []
+    return sectores, impactos
+
+
 def clasifica(reg):
     texto = normaliza(reg["titulo"] + " " + reg.get("resumen", ""))
 
@@ -496,25 +706,47 @@ def clasifica(reg):
         topicos = ["otros"]
 
     tipo_medio = clasifica_tipo_medio(reg.get("medio", ""))
+    uaf_chile, confianza_uaf, motivos_uaf = analiza_uaf_chile(reg)
+    sujetos, impactos = clasifica_sujetos_obligados(texto)
+    if sujetos and "sujetos_obligados" not in topicos:
+        topicos.append("sujetos_obligados")
+    if sujetos and "vulneracion_la" in impactos and "vulneracion_sectorial" not in topicos:
+        topicos.append("vulneracion_sectorial")
+
     reg["fenomeno"] = fenomeno
     reg["naturaleza"] = naturaleza
     reg["precedentes"] = precedentes
     reg["topicos"] = topicos
     reg["tipo_medio"] = tipo_medio
-    reg["uaf"] = contiene(texto, MENCION_UAF)
+    reg["uaf"] = uaf_chile
+    reg["uaf_chile"] = uaf_chile
+    reg["uaf_confianza"] = confianza_uaf
+    reg["uaf_motivos"] = motivos_uaf
+    reg["sujetos_obligados"] = sujetos
+    reg["impactos_sujeto"] = impactos
     reg["nucleo"] = contiene(texto, ENCUADRE_NUCLEO)
     return reg
 
 
 def es_pertinente(reg):
-    """Filtra ruido: debe tocar el dominio LA/FT o mencionar directamente a la UAF."""
+    """Filtra ruido y excluye menciones a UAF extranjeras sin conexión chilena."""
     texto = normaliza(reg["titulo"] + " " + reg.get("resumen", ""))
-    disparadores = ENCUADRE_NUCLEO + MENCION_UAF + [
+    uaf_chile, estado_uaf, _ = analiza_uaf_chile(reg)
+    menciona_alguna_uaf = contiene(texto, MENCION_UAF)
+    if menciona_alguna_uaf and estado_uaf in {"uaf_extranjera", "ambigua"}:
+        return False
+
+    sectores, impactos = clasifica_sujetos_obligados(texto)
+    dominio = ENCUADRE_NUCLEO + [
         "crimen organizado", "gafilat", "gafi", "delitos economicos",
         "financiamiento del terrorismo", "sartor", "tren de aragua",
         "reporte de operaciones sospechosas", "delitos precedentes", "secreto bancario",
+        "beneficiario final", "debida diligencia", "persona expuesta politicamente",
     ]
-    return contiene(texto, disparadores)
+    sujeto_relevante = bool(sectores and impactos and contiene(texto, dominio + [
+        "oficial de cumplimiento", "sujeto obligado", "entidad reportante", "uaf chile",
+    ]))
+    return uaf_chile or contiene(texto, dominio) or sujeto_relevante
 
 
 # ─────────────────────────────────────────────────────────────
@@ -583,6 +815,8 @@ def calcula_metricas(prensa, social, dias, ahora):
     topicos = _ranking(prensa, "topicos", TOPICO_ETIQUETA)
     tipos_medio = _ranking(prensa, "tipo_medio", TIPO_MEDIO_ETIQUETA)
     medios = _ranking(prensa, "medio")
+    sujetos_obligados = _ranking(prensa, "sujetos_obligados", SUJETO_OBLIGADO_ETIQUETA)
+    impactos_sujeto = _ranking(prensa, "impactos_sujeto", IMPACTO_SUJETO_ETIQUETA)
 
     # Cronología y semanas para los 30 días.
     cronologia = []
@@ -623,7 +857,9 @@ def calcula_metricas(prensa, social, dias, ahora):
         detalle_uaf24.append({k: r.get(k) for k in (
             "id", "fecha", "hora", "fecha_iso", "medio", "tipo_medio", "tipo_medio_label",
             "titulo", "resumen", "link", "fenomeno", "fenomeno_label", "naturaleza",
-            "naturaleza_label", "precedentes", "precedentes_label", "topicos", "topicos_label"
+            "naturaleza_label", "precedentes", "precedentes_label", "topicos", "topicos_label",
+            "sujetos_obligados", "sujetos_obligados_label", "impactos_sujeto", "impactos_sujeto_label",
+            "uaf_confianza", "uaf_motivos"
         )})
 
     return {
@@ -641,6 +877,7 @@ def calcula_metricas(prensa, social, dias, ahora):
             "naturalezas_24h": _ranking(uaf24, "naturaleza", NATURALEZA_ETIQUETA),
             "tipos_medio_24h": _ranking(uaf24, "tipo_medio", TIPO_MEDIO_ETIQUETA),
             "medios_ranking_24h": _ranking(uaf24, "medio"),
+            "sujetos_obligados_24h": _ranking(uaf24, "sujetos_obligados", SUJETO_OBLIGADO_ETIQUETA),
             "detalle": detalle_uaf24,
         },
         "uaf_total": len(uaf_prensa),
@@ -661,6 +898,8 @@ def calcula_metricas(prensa, social, dias, ahora):
         "topicos": topicos,
         "tipos_medio": tipos_medio,
         "medios": medios,
+        "sujetos_obligados": sujetos_obligados,
+        "impactos_sujeto": impactos_sujeto,
         "cronologia": cronologia,
         "por_dia": por_dia,
         "semanas": semanas,
@@ -668,6 +907,8 @@ def calcula_metricas(prensa, social, dias, ahora):
             "medios": medios[:12],
             "fenomenos": [x for x in fenomenos if x["clave"] != "otro"][:12],
             "precedentes": [x for x in precedentes if x["clave"] != "indeterminado"][:12],
+            "sujetos_obligados": sujetos_obligados[:12],
+            "impactos_sujeto": impactos_sujeto[:12],
         },
         "plataformas": plataformas,
         "social_total": len(social),
@@ -864,30 +1105,60 @@ def carga_datos_previos():
 
 
 def enriquece_historico(reg):
-    """Completa campos nuevos en noticias guardadas por versiones anteriores."""
+    """Reclasifica noticias históricas con las reglas vigentes.
+
+    Esto permite corregir registros creados por versiones anteriores, incluidos
+    falsos positivos de UAF extranjeras y nuevas categorías de sujetos obligados.
+    """
     r = dict(reg)
     dt = _fecha_registro(r)
     if dt and not r.get("fecha_iso"):
         r["fecha_iso"] = dt.isoformat()
-    if not r.get("topicos") or not r.get("tipo_medio"):
-        crudo = {
-            "titulo": r.get("titulo", ""), "resumen": r.get("resumen", ""),
-            "medio": r.get("medio", ""),
-        }
-        enriquecido = clasifica(crudo)
-        r.setdefault("topicos", enriquecido["topicos"])
-        r.setdefault("tipo_medio", enriquecido["tipo_medio"])
-    r["topicos_label"] = r.get("topicos_label") or [TOPICO_ETIQUETA.get(t, t) for t in r.get("topicos", ["otros"])]
-    r["tipo_medio_label"] = r.get("tipo_medio_label") or TIPO_MEDIO_ETIQUETA.get(r.get("tipo_medio", "otro"), "Otro medio digital")
-    r["fenomeno_label"] = r.get("fenomeno_label") or FENOMENO_ETIQUETA.get(r.get("fenomeno", "otro"), "Otros")
-    r["naturaleza_label"] = r.get("naturaleza_label") or NATURALEZA_ETIQUETA.get(r.get("naturaleza", "analisis"), "Análisis y opinión")
-    r["precedentes_label"] = r.get("precedentes_label") or [PRECEDENTE_ETIQUETA.get(x, x) for x in r.get("precedentes", ["indeterminado"])]
+
+    crudo = {
+        "titulo": r.get("titulo", ""),
+        "resumen": r.get("resumen", ""),
+        "medio": r.get("medio", ""),
+        "fuente_url": r.get("fuente_url", ""),
+        "link": r.get("link", ""),
+    }
+    enriquecido = clasifica(crudo)
+    r.update({
+        "fenomeno": enriquecido["fenomeno"],
+        "naturaleza": enriquecido["naturaleza"],
+        "precedentes": enriquecido["precedentes"],
+        "topicos": enriquecido["topicos"],
+        "tipo_medio": enriquecido["tipo_medio"],
+        "uaf": enriquecido["uaf"],
+        "uaf_chile": enriquecido["uaf_chile"],
+        "uaf_confianza": enriquecido["uaf_confianza"],
+        "uaf_motivos": enriquecido["uaf_motivos"],
+        "sujetos_obligados": enriquecido["sujetos_obligados"],
+        "impactos_sujeto": enriquecido["impactos_sujeto"],
+        "nucleo": enriquecido["nucleo"],
+    })
+    r["topicos_label"] = [TOPICO_ETIQUETA.get(t, t) for t in r.get("topicos", ["otros"])]
+    r["tipo_medio_label"] = TIPO_MEDIO_ETIQUETA.get(r.get("tipo_medio", "otro"), "Otro medio digital")
+    r["sujetos_obligados_label"] = [SUJETO_OBLIGADO_ETIQUETA.get(x, x) for x in r.get("sujetos_obligados", [])]
+    r["impactos_sujeto_label"] = [IMPACTO_SUJETO_ETIQUETA.get(x, x) for x in r.get("impactos_sujeto", [])]
+    r["fenomeno_label"] = FENOMENO_ETIQUETA.get(r.get("fenomeno", "otro"), "Otros")
+    r["naturaleza_label"] = NATURALEZA_ETIQUETA.get(r.get("naturaleza", "analisis"), "Análisis y opinión")
+    r["precedentes_label"] = [PRECEDENTE_ETIQUETA.get(x, x) for x in r.get("precedentes", ["indeterminado"])]
     return r
 
 
 def mezcla_historico(previos, actuales, corte):
     combinados = {}
     for original in list(previos) + list(actuales):
+        crudo = {
+            "titulo": original.get("titulo", ""),
+            "resumen": original.get("resumen", ""),
+            "medio": original.get("medio", ""),
+            "fuente_url": original.get("fuente_url", ""),
+            "link": original.get("link", ""),
+        }
+        if not es_pertinente(crudo):
+            continue
         r = enriquece_historico(original)
         rid = r.get("id")
         if not rid:
@@ -938,6 +1209,7 @@ def pasada():
                 "hora": r["fecha_dt"].strftime("%H:%M"),
                 "fecha_iso": r["fecha_dt"].isoformat(),
                 "medio": r["medio"],
+                "fuente_url": r.get("fuente_url", ""),
                 "tipo_medio": r["tipo_medio"],
                 "tipo_medio_label": TIPO_MEDIO_ETIQUETA.get(r["tipo_medio"], "Otro medio digital"),
                 "titulo": r["titulo"],
@@ -951,6 +1223,13 @@ def pasada():
                 "precedentes_label": [PRECEDENTE_ETIQUETA.get(p, p) for p in r.get("precedentes", ["indeterminado"])],
                 "topicos": r.get("topicos", ["otros"]),
                 "topicos_label": [TOPICO_ETIQUETA.get(t, t) for t in r.get("topicos", ["otros"])],
+                "sujetos_obligados": r.get("sujetos_obligados", []),
+                "sujetos_obligados_label": [SUJETO_OBLIGADO_ETIQUETA.get(t, t) for t in r.get("sujetos_obligados", [])],
+                "impactos_sujeto": r.get("impactos_sujeto", []),
+                "impactos_sujeto_label": [IMPACTO_SUJETO_ETIQUETA.get(t, t) for t in r.get("impactos_sujeto", [])],
+                "uaf_chile": r.get("uaf_chile", r["uaf"]),
+                "uaf_confianza": r.get("uaf_confianza", "media"),
+                "uaf_motivos": r.get("uaf_motivos", []),
                 "plataforma": r.get("plataforma"),
                 "interacciones": r.get("interacciones", 0),
                 "uaf": r["uaf"],
