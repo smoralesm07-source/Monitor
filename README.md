@@ -1,296 +1,258 @@
-# Monitor UAF Chile · cobertura nacional con lectura de artículos
+# Monitor UAF Chile · v5.0 «cobertura-total-chile»
 
-Dashboard estático publicado en GitHub Pages y actualizado mediante GitHub Actions aproximadamente cada 15 minutos.
+Dashboard estático publicado en GitHub Pages y actualizado por GitHub Actions cada 15 minutos.
+El motor descubre noticias chilenas por seis vías, lee el cuerpo completo de los artículos y
+decide si la mención corresponde a la **Unidad de Análisis Financiero de Chile**.
 
-## Cambio principal de esta versión
-
-El monitor ya no depende únicamente del titular y la bajada que entrega Google News. Ahora trabaja en dos etapas:
-
-1. **Descubrimiento amplio de noticias chilenas.** Busca candidatos en Google News Chile, hace consultas por dominio, revisa sitemaps de medios priorizados y consulta directamente las noticias de `uaf.cl`.
-2. **Análisis del artículo completo.** Cuando la fuente pertenece a la lista de medios chilenos autorizados, descarga el artículo, extrae su cuerpo y vuelve a evaluar UAF, LA/FT, delitos precedentes, sujetos obligados, tópicos y fenómenos.
-
-Esto permite detectar noticias donde la expresión **Unidad de Análisis Financiero** o **UAF** aparece dentro del artículo y no en el titular.
-
-La versión del motor queda identificada en `datos.json` como:
+Identificador del motor en `datos.json`:
 
 ```text
-4.0-cuerpo-completo-chile
+5.0-cobertura-total-chile
 ```
 
-## Caso de control incorporado
+---
 
-La noticia de La Tercera sobre la falsa alerta de fraude, la amenaza atribuida al Tren de Aragua y el robo a un notario se utiliza como caso funcional de control.
+## 1. Errores y vulnerabilidades corregidas
 
-El título permite descubrirla por señales como:
+| Hallazgo | Efecto en la versión 4.0 | Corrección |
+|---|---|---|
+| `ssl.create_default_context()` se guardaba en `contexto`, pero se usaba `context=context` | `NameError` en cada envío: **las alertas por correo nunca salían**, solo quedaba `! fallo al enviar correo` en el log | contexto SSL corregido en STARTTLS y SMTPS |
+| País extranjero en cualquier parte del texto vetaba la noticia | Una nota chilena sobre la UAF que mencionara «Perú» o «Colombia» en otro párrafo se descartaba como UAF extranjera (falso negativo) | veto solo cuando el país **califica a la unidad** («UAF de Panamá», «Ecuador: la UAF», «UAFE») |
+| `urlopen` seguía redirecciones a cualquier destino | SSRF: un medio o feed comprometido podía dirigir el runner a `127.0.0.1` o al endpoint de metadatos `169.254.169.254` | validación de esquema, puerto y resolución DNS; se rechazan rangos privados, loopback, link-local y multicast, en la URL inicial y en cada redirección |
+| `r.read()` sin límite | una respuesta grande agotaba la memoria del runner | tope de bytes por respuesta (4 MB por defecto) |
+| `ET.fromstring` sobre XML de terceros | XXE / expansión de entidades («billion laughs») | se rechaza cualquier XML con `<!DOCTYPE` o `<!ENTITY` |
+| Enlaces sin validar en `datos.json` | un feed malicioso podía dejar un `javascript:` en el `href` del dashboard | solo se aceptan `http`/`https`; el resto se descarta antes de escribir el JSON |
+| `id` derivado de URL **y** titular | al editar el titular la misma nota entraba de nuevo y se reenviaba por correo | `id` derivado de la URL canónica, más una segunda deduplicación por titular y medio |
+| `guarda_estado` asumía la clave `vistos` | `KeyError` con un estado parcial | estado normalizado, escritura atómica y poda por antigüedad |
+| `parsea_fecha` no aceptaba ISO con microsegundos | las fechas de Bluesky quedaban nulas y los posts se perdían | parser de fechas ampliado (RFC-822, ISO, «28 de julio de 2026») |
+| Reescritura del bloque `FALLBACK` con `re.subn` y cadena de reemplazo | los escapes del JSON podían interpretarse como referencias de grupo | reemplazo mediante función |
+| `texto_enriquecido` completo se publicaba en Pages | el navegador descargaba varios MB por visita | se publica una versión ligera; el texto completo queda en la rama de estado |
 
-- fraude;
-- Tren de Aragua;
-- imputados;
-- notario.
+---
 
-Después, el análisis del cuerpo identifica:
+## 2. Fuentes incorporadas
 
-- lavado de activos;
-- referencia a la UAF dentro del artículo;
-- cuentas puente y testaferros;
-- transferencias fraccionadas;
-- Mercado Pago y banca;
-- compra de vehículos;
-- notario en calidad de víctima.
+Antes: Google News + 4 sitemaps + `uaf.cl` + Reddit/Bluesky.
+Ahora, **seis canales de descubrimiento**:
 
-Por ello puede aparecer en el dashboard y activar el correo UAF cuando sea una noticia nueva.
+1. **Google News Chile** — consultas de dominio LA/FT y `site:` por cada medio prioritario.
+2. **Bing News RSS** (`setmkt=es-CL`) — cobertura complementaria: indexa notas que Google omite.
+3. **GDELT DOC 2.0** — índice global sin API key, filtrado a español y a dominios chilenos.
+4. **Feeds propios de cada medio**, descubiertos automáticamente en tres pasos: `robots.txt`,
+   `<link rel="alternate" type="application/rss+xml">` de la portada y rutas habituales
+   (`/feed`, `/rss.xml`, `/arc/outboundfeeds/rss/?outputType=xml`, etc.). Los endpoints válidos
+   se guardan en el estado con vigencia de 72 horas.
+5. **News-sitemaps** declarados en `robots.txt` de los medios prioritarios.
+6. **Sitio institucional `uaf.cl`** más los feeds de Fiscalía, CMF, Poder Judicial, Contraloría,
+   SII, Aduanas, Senado, Cámara, Banco Central y Diario Oficial.
 
-## Fuentes y métodos de descubrimiento
+### Universo de medios
 
-### 1. Google News Chile
+78 dominios verificados, con nombre y tipo de medio normalizados. Se agregaron respecto de la
+versión anterior, entre otros: **Publimetro, La Hora, DF SUD, Estrategia, El Líbero,
+Diario UChile, Infogate, TVN, Canal 13, Mega, Radio Duna, Radio Agricultura, Diario Constitucional,
+Estado Diario, El Mercurio Legal, El Ovallino, El Martutino, El Pingüino, El Repuertero,
+Mundo Marítimo** y las fuentes institucionales **Poder Judicial, Contraloría, Banco Central,
+Consejo de Defensa del Estado y Biblioteca del Congreso**.
 
-Se mantienen las consultas generales sobre:
+Además hay un **segundo nivel**: cualquier dominio `.cl` o `.gob.cl` que aparezca en los
+buscadores entra al monitor marcado como `nivel_fuente: "chilena"`, en lugar de descartarse.
+Así ya no se pierde una mención publicada por un medio regional o especializado que no esté
+en la lista curada. El campo `nivel_fuente` distingue los cuatro niveles:
 
-- Unidad de Análisis Financiero y UAF;
-- lavado de activos y lavado de dinero;
-- financiamiento del terrorismo;
-- operaciones sospechosas;
-- cuentas puente, testaferros y transferencias fraccionadas;
-- investigaciones, formalizaciones e imputaciones;
-- sujetos obligados y sectores supervisados.
+| Nivel | Significado |
+|---|---|
+| `verificada` | medio chileno de la lista curada |
+| `institucional` | fuente pública chilena (`.gob.cl` o institución listada) |
+| `chilena` | dominio `.cl` no curado |
+| `nombre` | identificado por el nombre del medio cuando el feed no entrega dominio |
 
-Además, se ejecutan búsquedas específicas `site:` para medios chilenos prioritarios, entre ellos:
+---
 
-- La Tercera;
-- Diario Financiero;
-- BioBioChile;
-- Emol y El Mercurio;
-- CIPER;
-- El Mostrador;
-- Ex-Ante;
-- Cooperativa;
-- CNN Chile;
-- 24 Horas;
-- T13;
-- Meganoticias.
+## 3. Detección UAF: cómo se volvió más segura
 
-### 2. Sitemaps periodísticos
+El motor ya no busca una cadena de texto: analiza **cada mención por separado** y la puntúa.
 
-El monitor revisa directamente sitemaps recientes de:
+**Reconoce** `Unidad de Análisis Financiero`, `Unidades de Análisis Financiero`,
+`Unidad de Análisis Financiero (UAF)`, `UAF`, `U.A.F.` y `Unidad de Inteligencia Financiera`,
+con o sin tildes, en mayúsculas o minúsculas, y con el nombre partido por un salto de línea.
 
-- La Tercera;
-- Diario Financiero;
-- BioBioChile;
-- Emol.
+**Para cada mención** toma una ventana estrecha (±150 caracteres) y otra amplia (±430) y suma:
 
-Los títulos se preseleccionan mediante señales judiciales, financieras, criminales y sectoriales. Después se descarga el cuerpo del artículo para determinar su pertinencia real.
+- nombre completo, ley 19.913, contexto LA/FT;
+- nivel de la fuente (uaf.cl, institucional chilena, medio verificado, dominio `.cl`);
+- señales chilenas junto a la mención (`de Chile`, `chilena`, Ministerio Público, CMF, Fiscalía,
+  SII, PDI, Carabineros, GAFILAT, pesos chilenos, Santiago…);
+- enlace saliente a `uaf.cl` dentro del artículo, que también cuenta como evidencia.
 
-### 3. Sitio institucional UAF Chile
+**Y descuenta** solo cuando corresponde: el veto fuerte exige que el país o el organismo
+homólogo califique a la unidad (`UAF de Panamá`, `Unidad de Análisis Financiero del Perú`,
+`UAF panameña`, `Ecuador: la UAF`, `UAFE`, `UIAF`, `SEPRELAD`, `SEPBLAC`, `FinCEN`, `COAF`).
+Un país mencionado en otro párrafo resta 1 punto, no descarta la noticia.
 
-Se revisan directamente las dos primeras páginas de noticias de `uaf.cl`. Estas publicaciones forman parte del panorama general de 30 días, pero no se mezclan con la métrica principal de apariciones de la UAF en medios de prensa durante las últimas 24 horas.
+La sigla `UAF` aislada, sin contexto LA/FT ni señal chilena, se sigue descartando
+(`uaf_confianza: "sigla_ambigua"`), de modo que la ampliación de recall no introduce ruido.
 
-### 4. Redes sociales
+Cada registro queda con `uaf_confianza` (`alta`, `media`, `sigla_ambigua`, `uaf_extranjera`,
+`fuente_no_chilena`, `sin_mencion`), `uaf_puntaje`, `uaf_menciones` y `uaf_motivos`, para que la
+decisión sea auditable. Puedes probar el motor sobre un texto cualquiera:
 
-Se mantienen únicamente las fuentes con consulta automatizada pública disponible:
+```bash
+python3 monitor_uaf.py --probar-deteccion "La Unidad de Análisis Financiero remitió antecedentes a la Fiscalía. La red también operaba en Perú."
+```
 
-- Reddit;
-- Bluesky.
+### Barrido profundo rotativo
 
-No se incorporan X, LinkedIn, Instagram, Facebook ni TikTok como si fueran fuentes monitoreadas.
+Las búsquedas por palabra clave nunca son exhaustivas, así que cada corrida lee además el cuerpo
+de hasta 70 artículos recientes de medios chilenos **aún no revisados**, elegidos de los feeds y
+news-sitemaps. La memoria de artículos leídos vive en el estado (hasta 30.000 URLs, 21 días), por
+lo que ninguno se lee dos veces y, con 96 corridas diarias, se cubre buena parte de la producción
+de los medios prioritarios. Es lo más cercano a «infalible» que permite una fuente pública:
+detecta la mención aunque el titular no diga nada y aunque ningún buscador la haya indexado.
 
-## Filtro estricto de medios chilenos
+---
 
-La entrada al dashboard se controla mediante una lista blanca de dominios chilenos. Un resultado extranjero se descarta aunque Google News lo haya entregado usando la edición regional de Chile.
+## 4. Optimización
 
-La validación se realiza sobre:
+- **Paralelismo** con 6 hilos y un límite de una petición cada 0,9 s por dominio.
+- **Caché de cuerpos**: si el artículo ya estaba en el histórico, no se vuelve a descargar.
+  En régimen, cada corrida descarga solo lo nuevo en lugar de repetir ~190 artículos cada 15 min.
+- **Taxonomías precompiladas** en expresiones regulares únicas por categoría: la reclasificación
+  del histórico de 30 días pasa de miles de búsquedas de subcadena a una pasada por categoría.
+- **Presupuesto de tiempo** (`MONITOR_PRESUPUESTO_SEG`, 780 s en el workflow): el motor corta
+  ordenadamente antes del timeout del job y escribe siempre un `datos.json` válido.
+- **Reintentos con espera** y `gzip`/`deflate` en todas las descargas.
+- **Payload liviano**: `public/datos.json` se publica sin `texto_enriquecido`.
+- Si ninguna fuente responde, se conserva el `datos.json` anterior en lugar de publicar un
+  tablero vacío.
 
-- dominio declarado por Google News;
-- URL final después de seguir la redirección;
-- URL canónica del artículo;
-- nombre del medio como respaldo cuando el feed no informa el dominio.
+---
 
-Entre los dominios admitidos se incluyen medios nacionales, económicos, regionales e institucionales de Chile.
+## 5. Archivos que debes subir
 
-### Doble protección frente a noticias extranjeras
+| Archivo | Acción |
+|---|---|
+| `monitor_uaf.py` | reemplazar |
+| `construye_sitio.py` | reemplazar |
+| `.github/workflows/monitor.yml` | reemplazar (revisa que el nombre coincida con tu workflow actual; si el tuyo se llama distinto, borra el antiguo) |
+| `README.md` | reemplazar |
+| `.gitignore` | reemplazar |
 
-El monitor aplica dos controles:
+**`index.html` no cambia.** El esquema de `datos.json` es retrocompatible: se conservan todos los
+campos que el dashboard ya usaba y solo se agregaron `nivel_fuente`, `uaf_puntaje`,
+`uaf_menciones` y `niveles_fuente` en las métricas.
 
-1. **Control de fuente:** solo admite dominios incluidos expresamente en la lista chilena.
-2. **Control semántico:** una noticia de un medio chileno que trate sobre la UAF de Panamá, Ecuador, Perú, Colombia u otra jurisdicción no se clasifica como UAF Chile, salvo que mencione explícitamente a la institución chilena.
+### Desde el navegador
 
-En cada ejecución, el histórico de `monitor-state` se vuelve a clasificar. Así, las noticias extranjeras guardadas por versiones anteriores se eliminan automáticamente.
+1. **Code → Add file → Upload files** y arrastra los archivos.
+2. Confirma que GitHub indique que reemplazará los existentes → **Commit changes**.
+3. **Actions → Actualizar y publicar monitor → Run workflow**.
+4. Cuando termine en verde, abre la página y pulsa `Ctrl + F5`.
 
-## Lectura del cuerpo completo
+La primera corrida es la más lenta: descubre feeds y sitemaps de todos los dominios y no tiene
+caché. Desde la segunda, el descubrimiento se reparte en pocos dominios por corrida.
 
-Para cada candidato chileno, el motor intenta extraer:
+> El identificador de las noticias cambió de esquema. La primera corrida detecta el cambio,
+> registra todo el histórico como visto y **no envía correo**, para no disparar una alerta
+> masiva. Desde la segunda corrida el aviso funciona con normalidad.
 
-- titular;
-- descripción;
-- fecha de publicación;
-- URL canónica;
-- cuerpo principal del artículo.
+---
 
-Se utilizan, en este orden:
-
-1. metadatos estructurados JSON-LD, especialmente `articleBody`;
-2. contenido dentro de la etiqueta `<article>`;
-3. párrafos sustantivos de la página;
-4. versión AMP como respaldo para artículos de La Tercera cuando la versión principal entrega poco texto.
-
-Si un medio bloquea la lectura o entrega una página incompleta, el monitor conserva el titular y el resumen RSS en vez de interrumpir toda la actualización.
-
-## Precisión UAF Chile
-
-Una mención se clasifica como UAF Chile cuando:
-
-- aparece `Unidad de Análisis Financiero`, `UAF Chile` o una expresión equivalente;
-- la fuente es chilena;
-- existe contexto LA/FT, institucional o normativo suficiente;
-- no hay señales de que se trate exclusivamente de una unidad extranjera.
-
-La mera sigla `UAF` sin contexto financiero o LA/FT se considera ambigua y se descarta.
-
-Cuando la mención está en el cuerpo, el monitor almacena un fragmento denominado `contexto_uaf`. Ese texto aparece en el dashboard y también puede incorporarse al aviso por correo.
-
-## Sujetos obligados y rol dentro de la noticia
-
-El análisis cubre, entre otros:
-
-- banca y servicios financieros;
-- mercado de valores y fondos;
-- pensiones y seguros;
-- fintech y medios de pago;
-- inmobiliarias, notarios y conservadores;
-- vehículos, leasing y factoring;
-- casinos y apuestas;
-- aduanas y zonas francas;
-- metales, joyas y remates;
-- armas;
-- otros sujetos obligados.
-
-Además, intenta distinguir el papel de cada sector:
-
-- víctima o sector afectado;
-- canal utilizado para mover o integrar fondos;
-- entidad o sector investigado;
-- sector afectado por regulación o supervisión;
-- sector mencionado sin rol concluyente.
-
-## Cobertura temporal e histórico
-
-Cada ejecución:
-
-1. recupera el histórico desde la rama `monitor-state`;
-2. descubre noticias nuevas;
-3. enriquece los artículos chilenos con su cuerpo;
-4. reclasifica también las noticias antiguas;
-5. elimina noticias extranjeras y registros que superan 30 días;
-6. genera `datos.json`;
-7. publica GitHub Pages;
-8. guarda nuevamente el estado.
-
-El primer corte con esta versión puede demorar más que los anteriores, porque debe descargar y analizar artículos completos. Las ejecuciones posteriores reutilizan el histórico, aunque vuelven a validar su clasificación.
-
-## Interfaz
-
-La portada muestra exclusivamente menciones verificadas de la UAF de Chile en medios de prensa durante las últimas 24 horas, junto con una referencia secundaria de cinco días.
-
-El panorama general incorpora:
-
-- períodos de 7, 15 y 30 días;
-- evolución diaria y vista semanal;
-- UAF directa versus contexto LA/FT;
-- sujetos obligados y rol sectorial;
-- rankings de medios, tópicos, casos y delitos precedentes;
-- filtros interactivos mediante gráficos;
-- rango de fechas;
-- tabla paginada;
-- fragmento preciso alrededor de la mención UAF encontrada en el cuerpo.
-
-## Alertas por correo
-
-Se envía un correo únicamente cuando la actualización detecta al menos una **noticia nueva de prensa** validada como UAF Chile.
-
-El correo puede incluir:
-
-- medio, fecha y hora;
-- titular y enlace;
-- fragmento alrededor de la mención UAF;
-- tópico y tipo de información;
-- fenómeno o caso;
-- sujetos obligados y su posible rol.
-
-No generan correo:
-
-- noticias generales LA/FT sin una mención válida a la UAF de Chile;
-- noticias extranjeras;
-- publicaciones de Reddit o Bluesky;
-- noticias que ya estaban registradas.
-
-### Secretos necesarios
+## 6. Secretos y variables
 
 En `Settings → Secrets and variables → Actions`:
 
-| Nombre | Contenido |
+| Secreto | Contenido |
 |---|---|
 | `MONITOR_CORREO_ACTIVO` | `true` |
 | `MONITOR_SMTP_SERVIDOR` | servidor SMTP |
 | `MONITOR_SMTP_PUERTO` | puerto SMTP |
 | `MONITOR_SMTP_SEGURIDAD` | `starttls`, `ssl` o `ninguna` |
 | `MONITOR_SMTP_USUARIO` | cuenta remitente |
-| `MONITOR_SMTP_CLAVE` | clave de aplicación, token o clave SMTP |
-| `MONITOR_DESTINATARIOS` | correos separados por coma |
+| `MONITOR_SMTP_CLAVE` | clave de aplicación o token SMTP |
+| `MONITOR_DESTINATARIOS` | correos separados por coma o punto y coma |
 | `MONITOR_REMITENTE_NOMBRE` | `Monitor UAF Chile` |
 | `MONITOR_MINIMO_AVISO` | `1` |
 | `MONITOR_SILENCIO_MINUTOS` | `0` |
 | `MONITOR_SOLO_UAF` | `true` |
 
-## Archivos que debes reemplazar en GitHub
+Ajustes opcionales del motor (variables de entorno del paso *Ejecutar monitor*):
 
-Sube a la raíz del repositorio:
+| Variable | Defecto | Para qué |
+|---|---|---|
+| `MONITOR_PRESUPUESTO_SEG` | `720` | segundos máximos de corrida |
+| `MONITOR_HILOS` | `6` | descargas simultáneas |
+| `MONITOR_BARRIDO` | `70` | artículos del barrido profundo por corrida |
+| `MONITOR_MAX_ENRIQUECER` | `220` | artículos con palabra clave por corrida |
+| `MONITOR_RESPETA_ROBOTS` | `true` | respeta `robots.txt` al leer artículos |
+| `MONITOR_INTERVALO_HOST` | `0.9` | segundos mínimos entre peticiones al mismo dominio |
+| `MONITOR_VENTANA_DIAS` | `30` | ventana del histórico |
+| `MONITOR_MAX_TEXTO_GUARDADO` | `4000` | caracteres de cuerpo guardados por noticia |
 
-1. `monitor_uaf.py`
-2. `index.html`
-3. `README.md`
+### Sobre `robots.txt`
 
-El workflow y `construye_sitio.py` de la versión anterior siguen siendo compatibles. El ZIP completo también los incluye por seguridad.
+El motor **respeta `robots.txt` por defecto** al descargar cuerpos de artículos. Si un medio
+bloquea el acceso automatizado, el monitor conserva titular y resumen del feed y lo registra en el
+log. Si la UAF cuenta con autorización o convenio con un medio, puedes poner
+`MONITOR_RESPETA_ROBOTS: "false"` en el workflow; esa decisión es institucional, no técnica.
 
-### Actualización desde el navegador
+---
 
-1. Abre **Code** en el repositorio.
-2. Selecciona **Add file → Upload files**.
-3. Arrastra los tres archivos.
-4. Confirma que GitHub indique que reemplazará los existentes.
-5. Pulsa **Commit changes**.
-6. Abre **Actions → Actualizar y publicar monitor**.
-7. Pulsa **Run workflow** o espera el siguiente horario programado.
-8. Cuando termine en verde, abre GitHub Pages y presiona `Ctrl + F5`.
-
-## Qué revisar en Actions
-
-En el paso **Ejecutar monitor**, la nueva versión muestra datos como:
+## 7. Qué revisar en Actions
 
 ```text
-«consulta» → N resultados / M fuentes chilenas
-sitemap La Tercera → N candidatos temáticos
-UAF.cl directo → N noticias recientes
-prensa chilena única: N · cuerpos extraídos: N · extranjeros descartados: N
+Histórico: 412 registros · caché de cuerpos: 380
+  · Google News → 640 resultados brutos
+  · Bing News → 88 resultados brutos
+  · GDELT → 34 artículos chilenos
+  · fuentes de biobiochile.cl: 1 feed(s), 1 sitemap(s)
+  · Feeds propios de medios → 520 entradas
+  · News-sitemaps → 310 artículos recientes
+  · uaf.cl → 24 noticias institucionales
+  · candidatos chilenos únicos: 806 · objetivo: 190 · barrido profundo: 70 · descartados: 402
+  · prensa chilena: 244 · cuerpos nuevos: 61 · reutilizados de caché: 183 · sin cuerpo: 12
+Listo: 431 de prensa · 12 sociales · 3 nuevas · 512.4s
 ```
 
-En `datos.json` puedes confirmar:
+Y en `datos.json`:
 
 ```json
 {
-  "version_motor": "4.0-cuerpo-completo-chile",
+  "version_motor": "5.0-cobertura-total-chile",
   "cobertura_tecnica": {
     "cuerpos_extraidos": 0,
     "fuentes_institucionales": 0,
-    "solo_fuentes_chilenas": true
+    "medios_en_lista_blanca": 78,
+    "dominios_con_feed": 0,
+    "dominios_con_sitemap": 0,
+    "articulos_en_memoria": 0,
+    "respeta_robots": true,
+    "segundos_corrida": 0
   }
 }
 ```
 
-Los números serán diferentes en cada ejecución.
+Diagnóstico manual de fuentes, útil tras cambiar la lista de medios:
 
-## Limitaciones
+```bash
+python3 monitor_uaf.py --diagnostico
+python3 monitor_uaf.py --probar-correo
+```
 
-- Algunos medios pueden bloquear temporalmente la extracción automatizada o modificar su estructura HTML.
-- Los buscadores no garantizan entregar todos los resultados indexados.
-- Los sitemaps pueden cambiar de ubicación o limitar el número de noticias recientes.
-- La clasificación temática y de roles es automática y debe validarse antes de utilizarla en informes institucionales.
-- No se realiza scraping de resultados generales de Google con una sesión de usuario. Se utilizan Google News RSS, consultas por dominio, sitemaps publicados y páginas públicas de los medios.
+---
+
+## 8. Límites que conviene tener claros
+
+- **«Infalible» no existe con fuentes públicas.** Ningún medio garantiza que su feed o sitemap
+  publique todas sus notas, y los buscadores no exponen todo su índice. El diseño reduce el riesgo
+  con seis canales redundantes y el barrido rotativo, pero una nota tras muro de pago cerrado o
+  fuera de todo índice puede no aparecer.
+- La clasificación temática, los roles sectoriales y los delitos precedentes son automáticos por
+  palabras clave: sirven para priorizar la lectura, **no para citarse en un informe institucional
+  sin validación humana**.
+- `uaf_confianza: "media"` corresponde a menciones donde la sigla aparece con contexto LA/FT pero
+  sin señal chilena explícita; conviene revisarlas manualmente.
+- Los medios cambian su HTML y sus rutas de feeds sin avisar. El autodescubrimiento se revalida
+  cada 72 horas, y el log muestra qué dominios quedaron sin feed ni sitemap.
+- No se usa scraping de resultados de Google con sesión de usuario ni de plataformas sin API
+  pública (X, Instagram, Facebook, TikTok, LinkedIn).
