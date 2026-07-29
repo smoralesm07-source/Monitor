@@ -64,57 +64,46 @@ CONFIG_EJEMPLO = {
     }
 }
 
-VENTANA_DIAS = 5
-UA = "Mozilla/5.0 (compatible; MonitorUAF/1.0)"
+VENTANA_DIAS = 30
+UA = "Mozilla/5.0 (compatible; MonitorUAF/2.0; +https://github.com/)"
 TIMEOUT = 25
 
 # Huso de Chile continental con cambio automático de horario.
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 
-# Conceptos vigilados. Cada consulta se lanza contra Google News RSS.
+# Conceptos vigilados. Google News recibe además el operador when:30d.
 CONSULTAS_PRENSA = [
     '"Unidad de Análisis Financiero"',
     'UAF lavado de activos Chile',
     '"lavado de activos" Chile',
+    '"lavado de dinero" Chile',
+    '"financiamiento del terrorismo" Chile',
+    '"reporte de operaciones sospechosas"',
+    '"operaciones sospechosas" Chile',
+    '"delitos precedentes" lavado Chile',
+    '"Sistema de Inteligencia Económica" UAF',
+    'GAFILAT Chile',
+    'GAFI Chile lavado de activos',
     '"Operación Tokio" Tren de Aragua',
     '"caso Sartor" formalización',
-    '"financiamiento del terrorismo" Chile',
-    '"Sistema de Inteligencia Económica" UAF',
-    '"reporte de operaciones sospechosas"',
-    'GAFILAT Chile',
+    'corrupción lavado de activos Chile',
+    'narcotráfico lavado de activos Chile',
+    'contrabando lavado de activos Chile',
 ]
 
-# Fuentes sociales públicas sin autenticación.
+# Solo se muestran redes con acceso automatizado público utilizable.
 CONSULTAS_SOCIALES = [
     '"lavado de activos"',
     '"Unidad de Análisis Financiero"',
     'UAF Chile',
-    '"caso Sartor"',
+    '"financiamiento del terrorismo" Chile',
 ]
 SUBREDDITS = ["chile"]
-
-# Estado de cada plataforma. Distingue dos situaciones que no hay que confundir:
-#   monitoreado    → la consultamos y sabemos si hay o no figuración
-#   sin_acceso     → no la podemos consultar; la ausencia de datos no dice nada
 PLATAFORMAS = [
-    {"id": "reddit",   "nombre": "Reddit",           "estado": "monitoreado",
-     "nota": "Búsqueda pública vía RSS en r/chile. Sin autenticación."},
-    {"id": "bluesky",  "nombre": "Bluesky",          "estado": "monitoreado",
-     "nota": "API pública de búsqueda de posts. Sin autenticación."},
-    {"id": "x",        "nombre": "X (Twitter)",      "estado": "sin_acceso",
-     "nota": "La búsqueda exige API de pago desde 2023. Sin ella no se puede afirmar "
-             "que haya o no figuración."},
-    {"id": "instagram","nombre": "Instagram",        "estado": "sin_acceso",
-     "nota": "Graph API solo entrega datos de cuentas propias verificadas. "
-             "No permite búsqueda por palabra clave."},
-    {"id": "facebook", "nombre": "Facebook",         "estado": "sin_acceso",
-     "nota": "CrowdTangle cerró en agosto de 2024. El reemplazo está restringido "
-             "a investigadores acreditados."},
-    {"id": "tiktok",   "nombre": "TikTok",           "estado": "sin_acceso",
-     "nota": "Research API limitada a instituciones académicas aprobadas."},
-    {"id": "linkedin", "nombre": "LinkedIn",         "estado": "sin_acceso",
-     "nota": "Sin API de búsqueda pública. Es donde circula el debate de "
-             "cumplimiento, así que es un punto ciego relevante."},
+    {"id": "reddit", "nombre": "Reddit", "estado": "monitoreado",
+     "nota": "Consulta pública JSON en r/chile; puede estar sujeta a límites de la plataforma."},
+    {"id": "bluesky", "nombre": "Bluesky", "estado": "monitoreado",
+     "nota": "API pública de búsqueda de publicaciones, sin autenticación."},
 ]
 
 # ─────────────────────────────────────────────────────────────
@@ -210,6 +199,62 @@ ENCUADRE_NUCLEO = ["lavado de activos", "lavado de dinero", "blanqueo", "activos
 
 MENCION_UAF = ["unidad de análisis financiero", "unidad de analisis financiero",
                r"\buaf\b", "análisis financiero (uaf)"]
+
+
+TOPICOS = {
+    "fiscalizacion": ["fiscaliz", "sancion", "multa", "supervision", "incumplimiento"],
+    "reportes": ["reporte de operaciones sospechosas", " reporte ros", " ros ",
+                 "reporte de operaciones en efectivo", " roe ", "sujeto obligado", "reportante"],
+    "normativa": ["circular", "normativa", "reglamento", "ley 19.913", "proyecto de ley",
+                  "secreto bancario", "sistema de inteligencia economica"],
+    "inteligencia": ["inteligencia financiera", "analisis financiero", "operacion sospechosa",
+                     "ruta del dinero", "trazabilidad", "informe financiero"],
+    "investigacion_penal": ["fiscalia", "formaliz", "imputad", "tribunal", "condena",
+                            "querella", "investigacion penal", "prision preventiva"],
+    "crimen_organizado": ["crimen organizado", "tren de aragua", "banda criminal",
+                          "organizacion criminal", "narcotrafico", "trata de personas"],
+    "cooperacion": ["gafi", "gafilat", "egmont", "cooperacion", "convenio", "estrategia nacional"],
+    "prevencion": ["prevencion", "lavado de activos", "financiamiento del terrorismo", "la/ft"],
+    "gestion_uaf": ["director", "cuenta publica", "presupuesto", "dotacion", "capacitacion",
+                    "unidad de analisis financiero informa", "uaf publica"],
+}
+TOPICO_ETIQUETA = {
+    "fiscalizacion": "Fiscalización y sanciones",
+    "reportes": "Reportes y sujetos obligados",
+    "normativa": "Normativa y regulación",
+    "inteligencia": "Inteligencia financiera",
+    "investigacion_penal": "Investigación y persecución penal",
+    "crimen_organizado": "Crimen organizado",
+    "cooperacion": "Cooperación y estándares internacionales",
+    "prevencion": "Prevención de LA/FT",
+    "gestion_uaf": "Gestión institucional UAF",
+    "otros": "Otros asuntos UAF/LAFT",
+}
+
+TIPOS_MEDIO = {
+    "economico": ["diario financiero", "df mas", "df más", "pulso", "bloomberg", "america economia",
+                  "américa economía", "estrategia", "mercurio inversiones"],
+    "television_radio": ["cnn chile", "24 horas", "t13", "meganoticias", "chv noticias",
+                         "radio biobio", "radio bío bío", "cooperativa", "adn radio", "tele13"],
+    "investigacion_digital": ["ciper", "interferencia", "el mostrador", "ex-ante", "el desconcierto",
+                              "the clinic", "biobiochile"],
+    "regional": ["soychile", "estrella de", "diario de atacama", "diario de concepcion",
+                 "diario de concepción", "el austral", "el rancaguino", "el dia", "el día",
+                 "la discusion", "la discusión", "el mercurio de valparaiso", "el mercurio de valparaíso"],
+    "institucional": ["uaf", "gobierno", "ministerio", "fiscalia", "fiscalía", "pdi", "senado",
+                      "camara", "cámara", "gafilat", "cmf"],
+    "prensa_nacional": ["emol", "la tercera", "el mercurio", "latercera", "la segunda", "lun",
+                        "las ultimas noticias", "las últimas noticias"],
+}
+TIPO_MEDIO_ETIQUETA = {
+    "economico": "Prensa económica y financiera",
+    "television_radio": "Televisión y radio",
+    "investigacion_digital": "Medio digital o de investigación",
+    "regional": "Prensa regional",
+    "institucional": "Fuente institucional",
+    "prensa_nacional": "Prensa nacional",
+    "otro": "Otro medio digital",
+}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -330,13 +375,14 @@ def lee_rss(url, origen):
 def recolecta_prensa():
     crudos = []
     for q in CONSULTAS_PRENSA:
+        consulta = f"{q} when:{VENTANA_DIAS}d"
         url = ("https://news.google.com/rss/search?q="
-               + urllib.parse.quote(q)
+               + urllib.parse.quote(consulta)
                + "&hl=es-419&gl=CL&ceid=CL:es-419")
         hallazgos = lee_rss(url, "Google News")
         log(f"  · «{q}» → {len(hallazgos)}")
         crudos.extend(hallazgos)
-        time.sleep(1.2)  # cortesía con el servidor
+        time.sleep(1.0)
     return crudos
 
 
@@ -344,7 +390,7 @@ def recolecta_bluesky():
     """API pública de Bluesky: búsqueda de posts sin autenticación."""
     crudos = []
     for q in CONSULTAS_SOCIALES:
-        url = ("https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?limit=25&q="
+        url = ("https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?limit=50&q="
                + urllib.parse.quote(q))
         try:
             datos = json.loads(descarga(url))
@@ -360,7 +406,7 @@ def recolecta_bluesky():
             uri = p.get("uri", "")
             rkey = uri.rsplit("/", 1)[-1] if uri else ""
             crudos.append({
-                "titulo": limpia_html(rec.get("text", ""))[:220],
+                "titulo": limpia_html(rec.get("text", ""))[:280],
                 "link": f"https://bsky.app/profile/{handle}/post/{rkey}" if rkey else "",
                 "medio": f"@{handle}",
                 "resumen": "",
@@ -371,51 +417,60 @@ def recolecta_bluesky():
                                   + p.get("replyCount", 0)),
             })
         log(f"  · Bluesky «{q}» → {len(posts)}")
-        time.sleep(1.2)
+        time.sleep(1.0)
+    return crudos
+
+
+def recolecta_reddit():
+    """Consulta JSON pública de Reddit; no incluye plataformas sin acceso automatizado."""
+    crudos = []
+    for sub in SUBREDDITS:
+        for q in CONSULTAS_SOCIALES:
+            url = (f"https://www.reddit.com/r/{sub}/search.json?q="
+                   + urllib.parse.quote(q)
+                   + "&restrict_sr=1&sort=new&t=month&limit=50&raw_json=1")
+            try:
+                datos = json.loads(descarga(url))
+            except Exception as e:
+                log(f"  ! fallo en Reddit r/{sub} «{q}»: {type(e).__name__}")
+                continue
+            hijos = datos.get("data", {}).get("children", [])
+            for h in hijos:
+                d = h.get("data", {})
+                creado = d.get("created_utc")
+                fecha_dt = datetime.fromtimestamp(creado, tz=timezone.utc).astimezone(TZ_CL) if creado else None
+                permalink = d.get("permalink", "")
+                crudos.append({
+                    "titulo": limpia_html(d.get("title", ""))[:280],
+                    "link": "https://www.reddit.com" + permalink if permalink else d.get("url", ""),
+                    "medio": f"r/{sub}",
+                    "resumen": limpia_html(d.get("selftext", ""))[:600],
+                    "fecha_dt": fecha_dt,
+                    "origen": "Reddit",
+                    "plataforma": "reddit",
+                    "interacciones": int(d.get("score", 0) or 0) + int(d.get("num_comments", 0) or 0),
+                    "autor": d.get("author", ""),
+                })
+            log(f"  · Reddit r/{sub} «{q}» → {len(hijos)}")
+            time.sleep(1.0)
     return crudos
 
 
 def recolecta_social():
-    crudos = []
-    for sub in SUBREDDITS:
-        for q in CONSULTAS_SOCIALES:
-            url = (f"https://www.reddit.com/r/{sub}/search.rss?q="
-                   + urllib.parse.quote(q)
-                   + "&restrict_sr=1&sort=new&t=week")
-            try:
-                raiz = ET.fromstring(descarga(url))
-            except Exception as e:
-                log(f"  ! fallo en r/{sub} «{q}»: {type(e).__name__}")
-                continue
-
-            ns = {"a": "http://www.w3.org/2005/Atom"}
-            entradas = raiz.findall("a:entry", ns)
-            for e in entradas:
-                t = e.find("a:title", ns)
-                l = e.find("a:link", ns)
-                u = e.find("a:updated", ns)
-                au = e.find("a:author/a:name", ns)
-                if t is None or l is None:
-                    continue
-                crudos.append({
-                    "titulo": limpia_html(t.text),
-                    "link": l.get("href", ""),
-                    "medio": f"r/{sub}",
-                    "resumen": "",
-                    "fecha_dt": parsea_fecha(u.text if u is not None else ""),
-                    "origen": "Reddit",
-                    "plataforma": "reddit",
-                    "interacciones": 0,
-                    "autor": au.text if au is not None else "",
-                })
-            log(f"  · r/{sub} «{q}» → {len(entradas)}")
-            time.sleep(1.2)
-    return crudos
+    return recolecta_reddit() + recolecta_bluesky()
 
 
 # ─────────────────────────────────────────────────────────────
 # Clasificación
 # ─────────────────────────────────────────────────────────────
+
+def clasifica_tipo_medio(medio):
+    texto = normaliza(medio or "")
+    for clave, agujas in TIPOS_MEDIO.items():
+        if contiene(texto, agujas):
+            return clave
+    return "otro"
+
 
 def clasifica(reg):
     texto = normaliza(reg["titulo"] + " " + reg.get("resumen", ""))
@@ -432,25 +487,32 @@ def clasifica(reg):
             naturaleza = clave
             break
 
-    # Un caso puede tener varios delitos precedentes a la vez.
     precedentes = [k for k, v in PRECEDENTES.items() if contiene(texto, v)]
     if not precedentes:
         precedentes = ["indeterminado"]
 
+    topicos = [k for k, v in TOPICOS.items() if contiene(texto, v)]
+    if not topicos:
+        topicos = ["otros"]
+
+    tipo_medio = clasifica_tipo_medio(reg.get("medio", ""))
     reg["fenomeno"] = fenomeno
     reg["naturaleza"] = naturaleza
     reg["precedentes"] = precedentes
+    reg["topicos"] = topicos
+    reg["tipo_medio"] = tipo_medio
     reg["uaf"] = contiene(texto, MENCION_UAF)
     reg["nucleo"] = contiene(texto, ENCUADRE_NUCLEO)
     return reg
 
 
 def es_pertinente(reg):
-    """Filtra ruido: debe tocar el dominio LA/FT."""
+    """Filtra ruido: debe tocar el dominio LA/FT o mencionar directamente a la UAF."""
     texto = normaliza(reg["titulo"] + " " + reg.get("resumen", ""))
     disparadores = ENCUADRE_NUCLEO + MENCION_UAF + [
         "crimen organizado", "gafilat", "gafi", "delitos economicos",
         "financiamiento del terrorismo", "sartor", "tren de aragua",
+        "reporte de operaciones sospechosas", "delitos precedentes", "secreto bancario",
     ]
     return contiene(texto, disparadores)
 
@@ -459,118 +521,158 @@ def es_pertinente(reg):
 # Métricas
 # ─────────────────────────────────────────────────────────────
 
-def calcula_metricas(prensa, social, dias):
-    total = len(prensa)
-    todo = prensa + social
+def _fecha_registro(reg):
+    iso = reg.get("fecha_iso")
+    if iso:
+        try:
+            dt = datetime.fromisoformat(iso)
+            return dt if dt.tzinfo else dt.replace(tzinfo=TZ_CL)
+        except ValueError:
+            pass
+    try:
+        return datetime.strptime(f"{reg['fecha']} {reg.get('hora', '00:00')}", "%Y-%m-%d %H:%M").replace(tzinfo=TZ_CL)
+    except (KeyError, ValueError):
+        return None
 
-    por_dia = {d: 0 for d in dias}
+
+def _ranking(registros, clave, etiqueta=None, excluir=None):
+    conteo = {}
+    for r in registros:
+        valores = r.get(clave, [])
+        if not isinstance(valores, list):
+            valores = [valores]
+        for valor in valores:
+            if valor in (None, "") or (excluir and valor in excluir):
+                continue
+            conteo[valor] = conteo.get(valor, 0) + 1
+    salida = []
+    for k, n in sorted(conteo.items(), key=lambda x: (-x[1], str(x[0]))):
+        salida.append({"clave": k, "label": etiqueta.get(k, k) if etiqueta else k, "n": n})
+    return salida
+
+
+def calcula_metricas(prensa, social, dias, ahora):
+    total = len(prensa)
+    uaf_prensa = [r for r in prensa if r.get("uaf")]
+    contexto = [r for r in prensa if not r.get("uaf")]
+
+    por_dia = {d: {"total": 0, "uaf": 0, "contexto": 0} for d in dias}
     for r in prensa:
         if r["fecha"] in por_dia:
-            por_dia[r["fecha"]] += 1
+            por_dia[r["fecha"]]["total"] += 1
+            por_dia[r["fecha"]]["uaf" if r.get("uaf") else "contexto"] += 1
 
-    # ── Registro UAF: el indicador principal ──
-    uaf_prensa = [r for r in prensa if r.get("uaf")]
-    uaf_social = [r for r in social if r.get("uaf")]
-    uaf_total = len(uaf_prensa) + len(uaf_social)
+    corte24 = ahora - timedelta(hours=24)
+    corte48 = ahora - timedelta(hours=48)
+    corte5 = ahora - timedelta(days=5)
+    uaf24 = [r for r in uaf_prensa if (_fecha_registro(r) or datetime.min.replace(tzinfo=TZ_CL)) >= corte24]
+    uaf_prev24 = [r for r in uaf_prensa if corte48 <= (_fecha_registro(r) or datetime.min.replace(tzinfo=TZ_CL)) < corte24]
+    uaf5 = [r for r in uaf_prensa if (_fecha_registro(r) or datetime.min.replace(tzinfo=TZ_CL)) >= corte5]
+    actual, previo = len(uaf24), len(uaf_prev24)
+    diferencia = actual - previo
+    if previo:
+        pct = round(diferencia / previo * 100, 1)
+        direccion = "sube" if diferencia > 0 else ("baja" if diferencia < 0 else "estable")
+    else:
+        pct = None
+        direccion = "nueva" if actual > 0 else "estable"
 
-    # Desglose de fenómenos con detalle
-    fen = {}
-    for r in prensa:
-        f = fen.setdefault(r["fenomeno"], {
-            "clave": r["fenomeno"], "label": FENOMENO_ETIQUETA.get(r["fenomeno"], "Otros"),
-            "n": 0, "medios": set(), "dias": set(), "uaf": 0, "precedentes": set(),
-        })
-        f["n"] += 1
-        f["medios"].add(r["medio"])
-        f["dias"].add(r["fecha"])
-        if r.get("uaf"):
-            f["uaf"] += 1
-        for p in r.get("precedentes", []):
-            f["precedentes"].add(p)
+    fenomenos = _ranking(prensa, "fenomeno", FENOMENO_ETIQUETA)
+    precedentes = _ranking(prensa, "precedentes", PRECEDENTE_ETIQUETA)
+    naturalezas = _ranking(prensa, "naturaleza", NATURALEZA_ETIQUETA)
+    topicos = _ranking(prensa, "topicos", TOPICO_ETIQUETA)
+    tipos_medio = _ranking(prensa, "tipo_medio", TIPO_MEDIO_ETIQUETA)
+    medios = _ranking(prensa, "medio")
 
-    fenomenos = sorted(
-        ({"clave": v["clave"], "label": v["label"], "n": v["n"],
-          "medios": len(v["medios"]), "dias": sorted(v["dias"]), "uaf": v["uaf"],
-          "precedentes": [PRECEDENTE_ETIQUETA.get(p, p) for p in sorted(v["precedentes"])]}
-         for v in fen.values()),
-        key=lambda x: -x["n"])
-
-    # Delitos precedentes — un registro puede aportar a varios
-    prec = {}
-    for r in prensa:
-        for p in r.get("precedentes", []):
-            prec[p] = prec.get(p, 0) + 1
-    precedentes = sorted(
-        ({"clave": k, "label": PRECEDENTE_ETIQUETA.get(k, k), "n": v} for k, v in prec.items()),
-        key=lambda x: -x["n"])
-
-    # Tipo de información
-    nat = {}
-    for r in prensa:
-        nat[r["naturaleza"]] = nat.get(r["naturaleza"], 0) + 1
-    naturalezas = sorted(
-        ({"clave": k, "label": NATURALEZA_ETIQUETA.get(k, k), "n": v} for k, v in nat.items()),
-        key=lambda x: -x["n"])
-
-    # Cronología: matriz caso × día
+    # Cronología y semanas para los 30 días.
     cronologia = []
     for f in fenomenos:
         celdas = []
         for d in dias:
-            n = sum(1 for r in prensa if r["fenomeno"] == f["clave"] and r["fecha"] == d)
-            medios = sorted({r["medio"] for r in prensa
-                             if r["fenomeno"] == f["clave"] and r["fecha"] == d})
-            celdas.append({"dia": d, "n": n, "medios": medios})
-        cronologia.append({"clave": f["clave"], "label": f["label"], "celdas": celdas,
-                           "total": f["n"]})
+            rs = [r for r in prensa if r["fenomeno"] == f["clave"] and r["fecha"] == d]
+            celdas.append({"dia": d, "n": len(rs), "medios": sorted({r["medio"] for r in rs})})
+        cronologia.append({"clave": f["clave"], "label": f["label"], "celdas": celdas, "total": f["n"]})
 
-    # Estado por plataforma social
+    semanas = []
+    bloque = []
+    for dia in dias:
+        bloque.append(dia)
+        if datetime.strptime(dia, "%Y-%m-%d").weekday() == 6 or dia == dias[-1]:
+            regs = [r for r in prensa if r["fecha"] in bloque]
+            semanas.append({
+                "desde": bloque[0], "hasta": bloque[-1], "total": len(regs),
+                "uaf": sum(1 for r in regs if r.get("uaf")),
+                "contexto": sum(1 for r in regs if not r.get("uaf")),
+                "medios": len({r["medio"] for r in regs}),
+            })
+            bloque = []
+
     plataformas = []
     for p in PLATAFORMAS:
+        posts = [s for s in social if s.get("plataforma") == p["id"]]
         base = dict(p)
-        if p["estado"] == "monitoreado":
-            posts = [s for s in social if s.get("plataforma") == p["id"]]
-            base["menciones"] = len(posts)
-            base["menciones_uaf"] = sum(1 for s in posts if s.get("uaf"))
-            base["interacciones"] = sum(s.get("interacciones", 0) for s in posts)
-        else:
-            base["menciones"] = None
-            base["menciones_uaf"] = None
-            base["interacciones"] = None
+        base.update({
+            "menciones": len(posts),
+            "menciones_uaf": sum(1 for s in posts if s.get("uaf")),
+            "interacciones": sum(s.get("interacciones", 0) for s in posts),
+        })
         plataformas.append(base)
 
-    monitoreadas = [p for p in plataformas if p["estado"] == "monitoreado"]
+    detalle_uaf24 = []
+    for r in sorted(uaf24, key=lambda x: (_fecha_registro(x) or corte48), reverse=True):
+        detalle_uaf24.append({k: r.get(k) for k in (
+            "id", "fecha", "hora", "fecha_iso", "medio", "tipo_medio", "tipo_medio_label",
+            "titulo", "resumen", "link", "fenomeno", "fenomeno_label", "naturaleza",
+            "naturaleza_label", "precedentes", "precedentes_label", "topicos", "topicos_label"
+        )})
 
     return {
-        # Indicador principal
-        "uaf_total": uaf_total,
+        "uaf_portada": {
+            "menciones_24h": actual,
+            "menciones_previas_24h": previo,
+            "diferencia": diferencia,
+            "variacion_pct": pct,
+            "direccion": direccion,
+            "menciones_5d": len(uaf5),
+            "medios_24h": len({r["medio"] for r in uaf24}),
+            "medios_5d": len({r["medio"] for r in uaf5}),
+            "topicos_24h": _ranking(uaf24, "topicos", TOPICO_ETIQUETA),
+            "fenomenos_24h": _ranking(uaf24, "fenomeno", FENOMENO_ETIQUETA),
+            "naturalezas_24h": _ranking(uaf24, "naturaleza", NATURALEZA_ETIQUETA),
+            "tipos_medio_24h": _ranking(uaf24, "tipo_medio", TIPO_MEDIO_ETIQUETA),
+            "medios_ranking_24h": _ranking(uaf24, "medio"),
+            "detalle": detalle_uaf24,
+        },
+        "uaf_total": len(uaf_prensa),
         "uaf_prensa": len(uaf_prensa),
-        "uaf_social": len(uaf_social),
-        "uaf_donde": [{"medio": r["medio"], "fecha": r["fecha"], "titulo": r["titulo"],
-                       "link": r["link"], "canal": r["canal"]}
-                      for r in (uaf_prensa + uaf_social)][:6],
-
-        # Conteos concretos
+        "uaf_social": sum(1 for r in social if r.get("uaf")),
+        "uaf_donde": detalle_uaf24[:8],
+        "contexto_total": len(contexto),
         "volumen": total,
-        "volumen_hoy": por_dia[dias[-1]],
-        "dias_con_actividad": sum(1 for d in dias if por_dia[d] > 0),
+        "volumen_hoy": por_dia[dias[-1]]["total"],
+        "dias_con_actividad": sum(1 for d in dias if por_dia[d]["total"] > 0),
         "dias_ventana": len(dias),
         "medios_unicos": len({r["medio"] for r in prensa}),
-        "casos_activos": len(fenomenos),
+        "casos_activos": len([f for f in fenomenos if f["clave"] != "otro"]),
         "precedentes_distintos": len([p for p in precedentes if p["clave"] != "indeterminado"]),
-
-        # Desgloses
         "fenomenos": fenomenos,
         "precedentes": precedentes,
         "naturalezas": naturalezas,
+        "topicos": topicos,
+        "tipos_medio": tipos_medio,
+        "medios": medios,
         "cronologia": cronologia,
         "por_dia": por_dia,
-
-        # Redes
+        "semanas": semanas,
+        "rankings_30d": {
+            "medios": medios[:12],
+            "fenomenos": [x for x in fenomenos if x["clave"] != "otro"][:12],
+            "precedentes": [x for x in precedentes if x["clave"] != "indeterminado"][:12],
+        },
         "plataformas": plataformas,
         "social_total": len(social),
-        "social_monitoreadas": len(monitoreadas),
-        "social_sin_acceso": len(plataformas) - len(monitoreadas),
+        "social_monitoreadas": len(plataformas),
+        "social_sin_acceso": 0,
     }
 
 
@@ -673,7 +775,7 @@ def envia_correo(config, nuevos, metricas):
     candidatos = [n for n in nuevos if n.get("uaf")] if c.get("solo_si_menciona_uaf") else list(nuevos)
     minimo = max(1, int(c.get("minimo_para_avisar", 1)))
     if len(candidatos) < minimo:
-        log(f"Correo omitido: {len(candidatos)} hallazgos relevantes; mínimo {minimo}.")
+        log(f"Correo omitido: {len(candidatos)} menciones relevantes; mínimo {minimo}.")
         return False
 
     estado = carga_estado()
@@ -697,10 +799,10 @@ def envia_correo(config, nuevos, metricas):
             f'<b>{html.escape(n["medio"])}</b> · {n["fecha"]} {n["hora"]}<br>'
             f'<a href="{html.escape(n["link"], quote=True)}">{html.escape(n["titulo"])}</a></li>'
         )
-    asunto = f"Monitor UAF: {len(candidatos)} nuevo{'s' if len(candidatos) != 1 else ''} hallazgo{'s' if len(candidatos) != 1 else ''}"
+    asunto = f"Monitor UAF: {len(candidatos)} nueva{'s' if len(candidatos) != 1 else ''} mención{'es' if len(candidatos) != 1 else ''}"
     html = (
         '<div style="font-family:Arial,sans-serif;max-width:760px">'
-        f'<h2>{asunto}</h2><p>Registros en la ventana: <b>{metricas.get("volumen", 0)}</b>. '
+        f'<h2>{asunto}</h2><p>Noticias en la ventana: <b>{metricas.get("volumen", 0)}</b>. '
         f'Menciones a la UAF: <b>{metricas.get("uaf_total", 0)}</b>.</p>'
         f'<ol>{"".join(filas)}</ol></div>'
     )
@@ -745,34 +847,82 @@ def carga_estado():
 
 
 def guarda_estado(estado):
-    estado["vistos"] = estado["vistos"][-4000:]
+    estado["vistos"] = estado["vistos"][-12000:]
     with open(ESTADO, "w", encoding="utf-8") as fh:
         json.dump(estado, fh, ensure_ascii=False)
 
 
+def carga_datos_previos():
+    if not os.path.exists(SALIDA):
+        return {"prensa": [], "social": []}
+    try:
+        with open(SALIDA, encoding="utf-8") as fh:
+            datos = json.load(fh)
+        return {"prensa": datos.get("prensa", []), "social": datos.get("social", [])}
+    except (OSError, json.JSONDecodeError):
+        return {"prensa": [], "social": []}
+
+
+def enriquece_historico(reg):
+    """Completa campos nuevos en noticias guardadas por versiones anteriores."""
+    r = dict(reg)
+    dt = _fecha_registro(r)
+    if dt and not r.get("fecha_iso"):
+        r["fecha_iso"] = dt.isoformat()
+    if not r.get("topicos") or not r.get("tipo_medio"):
+        crudo = {
+            "titulo": r.get("titulo", ""), "resumen": r.get("resumen", ""),
+            "medio": r.get("medio", ""),
+        }
+        enriquecido = clasifica(crudo)
+        r.setdefault("topicos", enriquecido["topicos"])
+        r.setdefault("tipo_medio", enriquecido["tipo_medio"])
+    r["topicos_label"] = r.get("topicos_label") or [TOPICO_ETIQUETA.get(t, t) for t in r.get("topicos", ["otros"])]
+    r["tipo_medio_label"] = r.get("tipo_medio_label") or TIPO_MEDIO_ETIQUETA.get(r.get("tipo_medio", "otro"), "Otro medio digital")
+    r["fenomeno_label"] = r.get("fenomeno_label") or FENOMENO_ETIQUETA.get(r.get("fenomeno", "otro"), "Otros")
+    r["naturaleza_label"] = r.get("naturaleza_label") or NATURALEZA_ETIQUETA.get(r.get("naturaleza", "analisis"), "Análisis y opinión")
+    r["precedentes_label"] = r.get("precedentes_label") or [PRECEDENTE_ETIQUETA.get(x, x) for x in r.get("precedentes", ["indeterminado"])]
+    return r
+
+
+def mezcla_historico(previos, actuales, corte):
+    combinados = {}
+    for original in list(previos) + list(actuales):
+        r = enriquece_historico(original)
+        rid = r.get("id")
+        if not rid:
+            continue
+        dt = _fecha_registro(r)
+        if not dt or dt < corte:
+            continue
+        combinados[rid] = r
+    return sorted(combinados.values(), key=lambda r: (_fecha_registro(r) or corte), reverse=True)
+
+
 def pasada():
     ahora = datetime.now(TZ_CL)
-    corte = (ahora - timedelta(days=VENTANA_DIAS - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    dias = [(corte + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(VENTANA_DIAS)]
+    corte = (ahora - timedelta(days=VENTANA_DIAS)).replace(second=0, microsecond=0)
+    primer_dia = (ahora - timedelta(days=VENTANA_DIAS - 1)).date()
+    dias = [(primer_dia + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(VENTANA_DIAS)]
 
+    previos = carga_datos_previos()
     log("Recolectando prensa…")
     crudos = recolecta_prensa()
-    log("Recolectando señal social…")
-    crudos_soc = recolecta_social() + recolecta_bluesky()
+    log("Recolectando señal social con acceso público…")
+    crudos_soc = recolecta_social()
 
-    # Si todas las fuentes fallan, conserva el último corte publicado.
     if not crudos and not crudos_soc and os.path.exists(SALIDA):
         log("! ninguna fuente respondió; se conserva el último datos.json")
         return 0
 
     estado = carga_estado()
-    vistos = set(estado["vistos"])
+    vistos = set(estado.get("vistos", []))
     nuevos = []
 
     def procesa(lote, canal):
         salida, dedup = [], set()
         for r in lote:
-            if not r["fecha_dt"] or r["fecha_dt"] < corte:
+            if not r.get("fecha_dt") or r["fecha_dt"] < corte:
                 continue
             if not es_pertinente(r):
                 continue
@@ -780,24 +930,27 @@ def pasada():
             if clave in dedup:
                 continue
             dedup.add(clave)
-
             r = clasifica(r)
             registro = {
                 "id": clave,
                 "canal": canal,
                 "fecha": r["fecha_dt"].strftime("%Y-%m-%d"),
                 "hora": r["fecha_dt"].strftime("%H:%M"),
+                "fecha_iso": r["fecha_dt"].isoformat(),
                 "medio": r["medio"],
+                "tipo_medio": r["tipo_medio"],
+                "tipo_medio_label": TIPO_MEDIO_ETIQUETA.get(r["tipo_medio"], "Otro medio digital"),
                 "titulo": r["titulo"],
                 "resumen": r.get("resumen", ""),
                 "link": r["link"],
                 "fenomeno": r["fenomeno"],
                 "fenomeno_label": FENOMENO_ETIQUETA.get(r["fenomeno"], "Otros"),
                 "naturaleza": r["naturaleza"],
-                "naturaleza_label": NATURALEZA_ETIQUETA.get(r["naturaleza"], "Análisis"),
+                "naturaleza_label": NATURALEZA_ETIQUETA.get(r["naturaleza"], "Análisis y opinión"),
                 "precedentes": r.get("precedentes", ["indeterminado"]),
-                "precedentes_label": [PRECEDENTE_ETIQUETA.get(p, p)
-                                      for p in r.get("precedentes", ["indeterminado"])],
+                "precedentes_label": [PRECEDENTE_ETIQUETA.get(p, p) for p in r.get("precedentes", ["indeterminado"])],
+                "topicos": r.get("topicos", ["otros"]),
+                "topicos_label": [TOPICO_ETIQUETA.get(t, t) for t in r.get("topicos", ["otros"])],
                 "plataforma": r.get("plataforma"),
                 "interacciones": r.get("interacciones", 0),
                 "uaf": r["uaf"],
@@ -810,37 +963,37 @@ def pasada():
             salida.append(registro)
         return salida
 
-    prensa = sorted(procesa(crudos, "prensa"),
-                    key=lambda r: (r["fecha"], r["hora"]), reverse=True)
-    social = sorted(procesa(crudos_soc, "social"),
-                    key=lambda r: (r["fecha"], r["hora"]), reverse=True)
+    prensa_actual = procesa(crudos, "prensa")
+    social_actual = procesa(crudos_soc, "social")
+    prensa = mezcla_historico(previos.get("prensa", []), prensa_actual, corte)
+    social = mezcla_historico(previos.get("social", []), social_actual, corte)
 
-    metricas = calcula_metricas(prensa, social, dias)
-
+    metricas = calcula_metricas(prensa, social, dias, ahora)
     salida = {
         "generado": ahora.isoformat(),
         "generado_legible": ahora.strftime("%d/%m/%Y %H:%M"),
-        "ventana": {"dias": dias, "hoy": dias[-1], "largo": VENTANA_DIAS},
+        "ventana": {"dias": dias, "hoy": ahora.strftime("%Y-%m-%d"), "largo": VENTANA_DIAS},
         "metricas": metricas,
         "prensa": prensa,
         "social": social,
         "nuevos": len(nuevos),
-        "consultas": len(CONSULTAS_PRENSA) + len(CONSULTAS_SOCIALES) * len(SUBREDDITS),
+        "consultas": len(CONSULTAS_PRENSA) + len(CONSULTAS_SOCIALES) * (len(SUBREDDITS) + 1),
     }
 
-    with open(SALIDA, "w", encoding="utf-8") as fh:
+    temporal = SALIDA + ".tmp"
+    with open(temporal, "w", encoding="utf-8") as fh:
         json.dump(salida, fh, ensure_ascii=False, indent=1)
+    os.replace(temporal, SALIDA)
 
     estado["vistos"] = list(vistos)
     guarda_estado(estado)
 
-    log(f"Listo: {len(prensa)} de prensa · {len(social)} sociales · {len(nuevos)} nuevos → {SALIDA}")
+    log(f"Listo: {len(prensa)} menciones/noticias de prensa · {len(social)} sociales · {len(nuevos)} nuevas → {SALIDA}")
     for n in nuevos[:12]:
-        log(f"   NUEVO [{n['canal']}] {n['medio']} — {n['titulo'][:88]}")
+        log(f"   NUEVA [{n['canal']}] {n['medio']} — {n['titulo'][:88]}")
 
     if nuevos:
         envia_correo(carga_config(), nuevos, metricas)
-
     return len(nuevos)
 
 

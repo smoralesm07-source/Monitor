@@ -1,73 +1,81 @@
-# Monitor UAF · publicación automática en GitHub Pages
+# Monitor UAF · menciones de prensa y contexto LA/FT
 
-Este repositorio contiene:
+Dashboard estático publicado en GitHub Pages y actualizado mediante GitHub Actions cada 15 minutos.
 
-- `index.html`: dashboard estático.
-- `monitor_uaf.py`: consulta fuentes públicas, clasifica hallazgos y genera `datos.json`.
-- `construye_sitio.py`: prepara únicamente los archivos que se publican.
-- `.github/workflows/actualizar-monitor.yml`: ejecuta el monitor cada 15 minutos y despliega GitHub Pages.
-- `datos.json`: corte inicial del dashboard.
-- `.monitor_estado.json`: huellas iniciales para no marcar el corte de ejemplo como nuevo.
+## Versión funcional actual
 
-## Arquitectura
+La interfaz se divide en dos niveles:
 
-GitHub Pages **no ejecuta Python** ni mantiene un proceso `--daemon`. El funcionamiento es:
+1. **Portada UAF de 24 horas:** muestra exclusivamente publicaciones de prensa que mencionan expresamente “UAF” o “Unidad de Análisis Financiero”. Compara las últimas 24 horas con las 24 horas anteriores y resume, en segundo plano, los últimos 5 días. Cuando existen menciones, detalla tópico, fenómeno o caso, tipo de información, tipo de medio, fuente y enlace.
+2. **Panorama general de hasta 30 días:** reúne menciones UAF directas y noticias sobre lavado de activos, financiamiento del terrorismo, delitos precedentes, cambios normativos, fenómenos y casos investigativos.
 
-1. GitHub Actions inicia una máquina temporal cada 15 minutos.
-2. Recupera el estado de la rama técnica `monitor-state`.
-3. Ejecuta una sola pasada de `monitor_uaf.py`.
-4. Genera `datos.json` y una copia fresca del dashboard.
-5. Publica `index.html` y `datos.json` mediante GitHub Pages.
-6. Reemplaza la rama `monitor-state` con el último estado, sin llenar `main` de commits automáticos.
+Incluye:
 
-## Publicación inicial
+- selector de 7, 15 y 30 días;
+- evolución diaria;
+- vista semanal;
+- separación entre mención UAF y contexto LA/FT general;
+- filtros por rango de fechas, caso, delito precedente, tipo de información, tipo de medio y fuente;
+- tabla paginada de 10 noticias;
+- indicadores de tendencia;
+- rankings mensuales de medios, casos/fenómenos y delitos precedentes;
+- redes únicamente cuando existe acceso automatizado público: Reddit y Bluesky;
+- acumulación del histórico móvil de 30 días en la rama técnica `monitor-state`.
 
-### 1. Crear el repositorio
+## Archivos principales
 
-En GitHub crea un repositorio llamado, por ejemplo, `monitor-uaf`.
+- `index.html`: dashboard y lógica interactiva.
+- `monitor_uaf.py`: recolección, clasificación, histórico y generación de `datos.json`.
+- `construye_sitio.py`: prepara los archivos publicados por GitHub Pages.
+- `.github/workflows/actualizar-monitor.yml`: actualiza y publica cada 15 minutos.
+- `datos.json`: último corte generado.
 
-Para usar GitHub Pages gratuitamente, el repositorio debe ser público. **No subas información interna, credenciales, listas reservadas ni datos personales.** El dashboard y `datos.json` serán accesibles desde internet.
+## Actualizar el repositorio sin Git y sin permisos de administrador
 
-### 2. Subir esta carpeta
+1. Descarga los archivos nuevos `index.html`, `monitor_uaf.py` y `README.md`.
+2. En GitHub abre el repositorio y entra a **Code**.
+3. Pulsa **Add file → Upload files**.
+4. Arrastra los tres archivos. GitHub indicará que reemplazarán los existentes.
+5. Escribe un mensaje como `Actualizar dashboard mensual` y pulsa **Commit changes**.
+6. La carga de `index.html` o `monitor_uaf.py` inicia automáticamente el workflow. También puedes ir a **Actions → Actualizar y publicar monitor → Run workflow**.
+7. Espera que la ejecución termine en verde y recarga la dirección de GitHub Pages con `Ctrl + F5`.
 
-Con Git instalado, abre una terminal dentro de esta carpeta y ejecuta:
+No necesitas instalar Git, Python ni ejecutar el computador de forma permanente.
 
-```bash
-git init
-git branch -M main
-git add .
-git commit -m "Publicar monitor UAF"
-git remote add origin https://github.com/TU_USUARIO/monitor-uaf.git
-git push -u origin main
-```
+## Cómo funciona el histórico mensual
 
-En Windows también puedes ejecutar `publicar_github.bat` y pegar la URL del repositorio cuando la solicite.
+GitHub Pages no ejecuta Python. Cada 15 minutos, GitHub Actions:
 
-### 3. Habilitar GitHub Pages
+1. recupera `datos.json` y `.monitor_estado.json` desde `monitor-state`;
+2. consulta las fuentes públicas;
+3. combina los resultados nuevos con el histórico guardado;
+4. elimina automáticamente lo que supera 30 días;
+5. genera las métricas de 24 horas, 5 días y 30 días;
+6. publica el sitio y vuelve a guardar el estado.
+
+El primer corte mensual puede llenarse progresivamente si alguna fuente no entrega de inmediato todas sus publicaciones anteriores.
+
+## Publicación inicial o verificación
 
 En el repositorio:
 
-1. `Settings` → `Pages`.
-2. En `Build and deployment`, selecciona **GitHub Actions** como fuente.
-3. `Settings` → `Actions` → `General` → `Workflow permissions`.
-4. Si el flujo falla al crear `monitor-state`, selecciona **Read and write permissions** y guarda.
+1. `Settings → Pages`.
+2. En `Build and deployment`, selecciona **GitHub Actions**.
+3. `Settings → Actions → General → Workflow permissions`.
+4. Selecciona **Read and write permissions** para permitir la rama `monitor-state`.
+5. Ejecuta **Actions → Actualizar y publicar monitor → Run workflow**.
 
-### 4. Ejecutar la primera actualización
+La dirección publicada normalmente será:
 
-1. Abre la pestaña `Actions`.
-2. Selecciona **Actualizar y publicar monitor**.
-3. Pulsa `Run workflow`.
-4. Revisa que termine con marcas verdes.
-5. En `Settings` → `Pages` aparecerá la dirección publicada:
-   `https://TU_USUARIO.github.io/monitor-uaf/`.
-
-La ejecución programada usa los minutos `07`, `22`, `37` y `52` de cada hora. GitHub puede retrasarla cuando existe alta demanda; no debe interpretarse como una vigilancia en tiempo real exacto.
+```text
+https://TU_USUARIO.github.io/monitor-uaf/
+```
 
 ## Correo electrónico opcional
 
-Primero deja que el flujo termine correctamente **con el correo desactivado**. Después crea los secretos en:
+Crea los secretos en:
 
-`Settings` → `Secrets and variables` → `Actions` → `New repository secret`.
+`Settings → Secrets and variables → Actions → New repository secret`.
 
 | Secreto | Ejemplo |
 |---|---|
@@ -83,52 +91,16 @@ Primero deja que el flujo termine correctamente **con el correo desactivado**. D
 | `MONITOR_SILENCIO_MINUTOS` | `60` |
 | `MONITOR_SOLO_UAF` | `true` |
 
-`config.json` está excluido mediante `.gitignore`. Nunca guardes contraseñas dentro del código, el HTML o `datos.json`.
-
-## Cambiar la frecuencia
-
-Edita `.github/workflows/actualizar-monitor.yml`:
-
-```yaml
-schedule:
-  - cron: "7,22,37,52 * * * *"
-```
-
-Ejemplos:
-
-```yaml
-# Cada 30 minutos
-- cron: "7,37 * * * *"
-
-# Una vez por hora
-- cron: "17 * * * *"
-```
-
-Las expresiones programadas se interpretan en UTC, pero como este flujo corre todo el día, el huso no afecta la periodicidad. El script usa `America/Santiago` para fechar los registros y adapta automáticamente el horario de invierno/verano cuando se ejecuta con Python 3.11.
+Nunca guardes contraseñas dentro del código, el HTML o `datos.json`.
 
 ## Diagnóstico
 
-En `Actions`, abre una ejecución y revisa el paso **Ejecutar monitor**.
-
-Mensajes relevantes:
+En `Actions`, abre una ejecución y revisa **Ejecutar monitor**.
 
 - `Listo: ... → datos.json`: ejecución correcta.
-- `ninguna fuente respondió; se conserva el último datos.json`: caída de conectividad o bloqueo temporal; no se vacía el dashboard.
+- `ninguna fuente respondió; se conserva el último datos.json`: caída temporal; el sitio no se vacía.
 - `fallo en Google News`, `Reddit` o `Bluesky`: una fuente concreta no respondió.
-- error en `Guardar estado`: revisa los permisos de escritura del workflow.
-- error en `Publicar en GitHub Pages`: confirma que Pages usa **GitHub Actions** como fuente.
+- error en `Guardar estado`: revisa los permisos de escritura.
+- error en Pages: confirma que la fuente seleccionada sea **GitHub Actions**.
 
-## Ejecución local
-
-```bash
-python monitor_uaf.py
-python -m http.server 8000
-```
-
-Luego abre `http://localhost:8000`.
-
-Para modo continuo local:
-
-```bash
-python monitor_uaf.py --daemon --intervalo 15
-```
+La clasificación por palabras clave es orientativa y debe validarse analíticamente antes de usarla para conclusiones institucionales.
