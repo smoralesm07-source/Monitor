@@ -1,130 +1,296 @@
-# Monitor UAF Chile · prensa, LA/FT y sujetos obligados
+# Monitor UAF Chile · cobertura nacional con lectura de artículos
 
 Dashboard estático publicado en GitHub Pages y actualizado mediante GitHub Actions aproximadamente cada 15 minutos.
 
-## Cambios de esta versión
+## Cambio principal de esta versión
 
-### 1. Validación específica de la UAF de Chile
+El monitor ya no depende únicamente del titular y la bajada que entrega Google News. Ahora trabaja en dos etapas:
 
-La etiqueta **Mención UAF Chile** ya no se activa por cualquier aparición de la sigla `UAF`.
+1. **Descubrimiento amplio de noticias chilenas.** Busca candidatos en Google News Chile, hace consultas por dominio, revisa sitemaps de medios priorizados y consulta directamente las noticias de `uaf.cl`.
+2. **Análisis del artículo completo.** Cuando la fuente pertenece a la lista de medios chilenos autorizados, descarga el artículo, extrae su cuerpo y vuelve a evaluar UAF, LA/FT, delitos precedentes, sujetos obligados, tópicos y fenómenos.
 
-El motor exige señales chilenas, entre ellas:
+Esto permite detectar noticias donde la expresión **Unidad de Análisis Financiero** o **UAF** aparece dentro del artículo y no en el titular.
 
-- expresiones como `UAF Chile`, `UAF de Chile` o `Unidad de Análisis Financiero de Chile`;
-- referencias a la Ley N.°19.913, CMF, SII, Ministerio Público, PDI u otras instituciones chilenas;
-- fuente oficial `uaf.cl`;
-- contexto territorial chileno o un medio de prensa nacional reconocido.
+La versión del motor queda identificada en `datos.json` como:
 
-Las menciones a unidades extranjeras —por ejemplo, UAF de Panamá— se excluyen cuando no existe una conexión explícita con Chile. Las noticias del histórico también se reclasifican en cada ejecución, por lo que los falsos positivos antiguos desaparecen después del primer corte con esta versión.
+```text
+4.0-cuerpo-completo-chile
+```
 
-### 2. Sujetos obligados
+## Caso de control incorporado
 
-El monitor incorpora noticias sobre sectores obligados a reportar a la UAF, agrupando analíticamente las 55 actividades informadas por la institución:
+La noticia de La Tercera sobre la falsa alerta de fraude, la amenaza atribuida al Tren de Aragua y el robo a un notario se utiliza como caso funcional de control.
+
+El título permite descubrirla por señales como:
+
+- fraude;
+- Tren de Aragua;
+- imputados;
+- notario.
+
+Después, el análisis del cuerpo identifica:
+
+- lavado de activos;
+- referencia a la UAF dentro del artículo;
+- cuentas puente y testaferros;
+- transferencias fraccionadas;
+- Mercado Pago y banca;
+- compra de vehículos;
+- notario en calidad de víctima.
+
+Por ello puede aparecer en el dashboard y activar el correo UAF cuando sea una noticia nueva.
+
+## Fuentes y métodos de descubrimiento
+
+### 1. Google News Chile
+
+Se mantienen las consultas generales sobre:
+
+- Unidad de Análisis Financiero y UAF;
+- lavado de activos y lavado de dinero;
+- financiamiento del terrorismo;
+- operaciones sospechosas;
+- cuentas puente, testaferros y transferencias fraccionadas;
+- investigaciones, formalizaciones e imputaciones;
+- sujetos obligados y sectores supervisados.
+
+Además, se ejecutan búsquedas específicas `site:` para medios chilenos prioritarios, entre ellos:
+
+- La Tercera;
+- Diario Financiero;
+- BioBioChile;
+- Emol y El Mercurio;
+- CIPER;
+- El Mostrador;
+- Ex-Ante;
+- Cooperativa;
+- CNN Chile;
+- 24 Horas;
+- T13;
+- Meganoticias.
+
+### 2. Sitemaps periodísticos
+
+El monitor revisa directamente sitemaps recientes de:
+
+- La Tercera;
+- Diario Financiero;
+- BioBioChile;
+- Emol.
+
+Los títulos se preseleccionan mediante señales judiciales, financieras, criminales y sectoriales. Después se descarga el cuerpo del artículo para determinar su pertinencia real.
+
+### 3. Sitio institucional UAF Chile
+
+Se revisan directamente las dos primeras páginas de noticias de `uaf.cl`. Estas publicaciones forman parte del panorama general de 30 días, pero no se mezclan con la métrica principal de apariciones de la UAF en medios de prensa durante las últimas 24 horas.
+
+### 4. Redes sociales
+
+Se mantienen únicamente las fuentes con consulta automatizada pública disponible:
+
+- Reddit;
+- Bluesky.
+
+No se incorporan X, LinkedIn, Instagram, Facebook ni TikTok como si fueran fuentes monitoreadas.
+
+## Filtro estricto de medios chilenos
+
+La entrada al dashboard se controla mediante una lista blanca de dominios chilenos. Un resultado extranjero se descarta aunque Google News lo haya entregado usando la edición regional de Chile.
+
+La validación se realiza sobre:
+
+- dominio declarado por Google News;
+- URL final después de seguir la redirección;
+- URL canónica del artículo;
+- nombre del medio como respaldo cuando el feed no informa el dominio.
+
+Entre los dominios admitidos se incluyen medios nacionales, económicos, regionales e institucionales de Chile.
+
+### Doble protección frente a noticias extranjeras
+
+El monitor aplica dos controles:
+
+1. **Control de fuente:** solo admite dominios incluidos expresamente en la lista chilena.
+2. **Control semántico:** una noticia de un medio chileno que trate sobre la UAF de Panamá, Ecuador, Perú, Colombia u otra jurisdicción no se clasifica como UAF Chile, salvo que mencione explícitamente a la institución chilena.
+
+En cada ejecución, el histórico de `monitor-state` se vuelve a clasificar. Así, las noticias extranjeras guardadas por versiones anteriores se eliminan automáticamente.
+
+## Lectura del cuerpo completo
+
+Para cada candidato chileno, el motor intenta extraer:
+
+- titular;
+- descripción;
+- fecha de publicación;
+- URL canónica;
+- cuerpo principal del artículo.
+
+Se utilizan, en este orden:
+
+1. metadatos estructurados JSON-LD, especialmente `articleBody`;
+2. contenido dentro de la etiqueta `<article>`;
+3. párrafos sustantivos de la página;
+4. versión AMP como respaldo para artículos de La Tercera cuando la versión principal entrega poco texto.
+
+Si un medio bloquea la lectura o entrega una página incompleta, el monitor conserva el titular y el resumen RSS en vez de interrumpir toda la actualización.
+
+## Precisión UAF Chile
+
+Una mención se clasifica como UAF Chile cuando:
+
+- aparece `Unidad de Análisis Financiero`, `UAF Chile` o una expresión equivalente;
+- la fuente es chilena;
+- existe contexto LA/FT, institucional o normativo suficiente;
+- no hay señales de que se trate exclusivamente de una unidad extranjera.
+
+La mera sigla `UAF` sin contexto financiero o LA/FT se considera ambigua y se descarta.
+
+Cuando la mención está en el cuerpo, el monitor almacena un fragmento denominado `contexto_uaf`. Ese texto aparece en el dashboard y también puede incorporarse al aviso por correo.
+
+## Sujetos obligados y rol dentro de la noticia
+
+El análisis cubre, entre otros:
 
 - banca y servicios financieros;
 - mercado de valores y fondos;
-- pensiones, seguros y mutuos;
+- pensiones y seguros;
 - fintech y medios de pago;
-- inmobiliario, notarios y conservadores;
+- inmobiliarias, notarios y conservadores;
 - vehículos, leasing y factoring;
-- casinos, apuestas y deporte profesional;
+- casinos y apuestas;
 - aduanas y zonas francas;
 - metales, joyas y remates;
-- fabricación y venta de armas;
-- otros sujetos obligados y entidades reportantes.
+- armas;
+- otros sujetos obligados.
 
-Para cada sector se intenta distinguir:
+Además, intenta distinguir el papel de cada sector:
 
-- vinculación o vulneración en casos de LA/FT;
-- cambio regulatorio o de supervisión;
-- gestión de cumplimiento preventivo;
-- cambio relevante en la industria.
+- víctima o sector afectado;
+- canal utilizado para mover o integrar fondos;
+- entidad o sector investigado;
+- sector afectado por regulación o supervisión;
+- sector mencionado sin rol concluyente.
 
-### 3. Gráficos como filtros
-
-Los siguientes elementos son interactivos:
-
-- barras de evolución diaria;
-- bloques semanales;
-- ranking de sujetos obligados;
-- ranking de impactos sectoriales;
-- tópicos;
-- medios;
-- casos y fenómenos;
-- delitos precedentes;
-- tarjetas de cobertura UAF directa versus contexto LA/FT.
-
-Al pulsarlos, se filtra la tabla de noticias y aparece una etiqueta con el filtro activo. Pulsar nuevamente el mismo elemento lo desactiva.
-
-### 4. Diseño
-
-La interfaz utiliza una identidad visual formal basada en azules profundos, turquesa y grises, asociada a la institucionalidad de la UAF Chile. El encabezado es tipográfico y no pretende reemplazar ni reproducir un logotipo oficial.
-
-## Archivos que debes reemplazar en GitHub
-
-Sube **estos cuatro archivos** a la raíz del repositorio:
-
-1. `index.html`
-2. `monitor_uaf.py`
-3. `construye_sitio.py`
-4. `README.md`
-
-Es indispensable reemplazar `construye_sitio.py`, porque la nueva interfaz utiliza un bloque de respaldo denominado `FALLBACK`.
-
-### Actualización sin Git ni permisos de administrador
-
-1. En GitHub abre el repositorio y entra a **Code**.
-2. Pulsa **Add file → Upload files**.
-3. Arrastra los cuatro archivos anteriores.
-4. Confirma que GitHub indique que reemplazará los existentes.
-5. Escribe, por ejemplo, `Mejorar precisión UAF Chile y sujetos obligados`.
-6. Pulsa **Commit changes**.
-7. En **Actions**, abre `Actualizar y publicar monitor`.
-8. Espera a que la ejecución automática termine en verde o pulsa **Run workflow**.
-9. Recarga GitHub Pages con `Ctrl + F5`.
-
-No es necesario modificar el workflow existente.
-
-## Funcionamiento general
+## Cobertura temporal e histórico
 
 Cada ejecución:
 
 1. recupera el histórico desde la rama `monitor-state`;
-2. consulta Google News, Reddit y Bluesky;
-3. valida la pertinencia chilena de las menciones UAF;
-4. clasifica casos, delitos precedentes, tópicos y sujetos obligados;
-5. elimina falsos positivos y noticias que superan 30 días;
+2. descubre noticias nuevas;
+3. enriquece los artículos chilenos con su cuerpo;
+4. reclasifica también las noticias antiguas;
+5. elimina noticias extranjeras y registros que superan 30 días;
 6. genera `datos.json`;
-7. publica el sitio en GitHub Pages;
-8. vuelve a guardar el estado.
+7. publica GitHub Pages;
+8. guarda nuevamente el estado.
+
+El primer corte con esta versión puede demorar más que los anteriores, porque debe descargar y analizar artículos completos. Las ejecuciones posteriores reutilizan el histórico, aunque vuelven a validar su clasificación.
 
 ## Interfaz
 
-La portada muestra exclusivamente menciones verificadas de la UAF de Chile durante las últimas 24 horas y un contexto secundario de cinco días.
+La portada muestra exclusivamente menciones verificadas de la UAF de Chile en medios de prensa durante las últimas 24 horas, junto con una referencia secundaria de cinco días.
 
-El panorama general incluye:
+El panorama general incorpora:
 
-- selector de 7, 15 y 30 días;
+- períodos de 7, 15 y 30 días;
 - evolución diaria y vista semanal;
 - UAF directa versus contexto LA/FT;
-- sujetos obligados e impacto sectorial;
+- sujetos obligados y rol sectorial;
 - rankings de medios, tópicos, casos y delitos precedentes;
-- filtros de rango de fechas;
-- tabla paginada de 10, 20 o 50 noticias;
-- señal social solo de plataformas con acceso automatizado público.
+- filtros interactivos mediante gráficos;
+- rango de fechas;
+- tabla paginada;
+- fragmento preciso alrededor de la mención UAF encontrada en el cuerpo.
 
-## Consideraciones analíticas
+## Alertas por correo
 
-La precisión geográfica fue priorizada sobre la cobertura. Una noticia que diga solamente `UAF`, sin señales chilenas suficientes, puede ser descartada para evitar atribuir a Chile información de otra jurisdicción.
+Se envía un correo únicamente cuando la actualización detecta al menos una **noticia nueva de prensa** validada como UAF Chile.
 
-Las clasificaciones son automáticas y orientativas. Antes de citar una noticia en un informe institucional conviene revisar la fuente original y validar el tópico, sector, impacto y delito precedente asignados.
+El correo puede incluir:
 
-## Diagnóstico
+- medio, fecha y hora;
+- titular y enlace;
+- fragmento alrededor de la mención UAF;
+- tópico y tipo de información;
+- fenómeno o caso;
+- sujetos obligados y su posible rol.
 
-En **Actions → Actualizar y publicar monitor**, revisa el paso **Ejecutar monitor**:
+No generan correo:
 
-- `Listo: ... → datos.json`: ejecución correcta.
-- `ninguna fuente respondió; se conserva el último datos.json`: caída temporal de fuentes.
-- `fallo en Google News`, `Reddit` o `Bluesky`: una fuente concreta no respondió.
-- error en `Construir sitio estático`: confirma que reemplazaste `construye_sitio.py`.
-- error en `Guardar estado`: revisa los permisos de escritura del workflow.
+- noticias generales LA/FT sin una mención válida a la UAF de Chile;
+- noticias extranjeras;
+- publicaciones de Reddit o Bluesky;
+- noticias que ya estaban registradas.
+
+### Secretos necesarios
+
+En `Settings → Secrets and variables → Actions`:
+
+| Nombre | Contenido |
+|---|---|
+| `MONITOR_CORREO_ACTIVO` | `true` |
+| `MONITOR_SMTP_SERVIDOR` | servidor SMTP |
+| `MONITOR_SMTP_PUERTO` | puerto SMTP |
+| `MONITOR_SMTP_SEGURIDAD` | `starttls`, `ssl` o `ninguna` |
+| `MONITOR_SMTP_USUARIO` | cuenta remitente |
+| `MONITOR_SMTP_CLAVE` | clave de aplicación, token o clave SMTP |
+| `MONITOR_DESTINATARIOS` | correos separados por coma |
+| `MONITOR_REMITENTE_NOMBRE` | `Monitor UAF Chile` |
+| `MONITOR_MINIMO_AVISO` | `1` |
+| `MONITOR_SILENCIO_MINUTOS` | `0` |
+| `MONITOR_SOLO_UAF` | `true` |
+
+## Archivos que debes reemplazar en GitHub
+
+Sube a la raíz del repositorio:
+
+1. `monitor_uaf.py`
+2. `index.html`
+3. `README.md`
+
+El workflow y `construye_sitio.py` de la versión anterior siguen siendo compatibles. El ZIP completo también los incluye por seguridad.
+
+### Actualización desde el navegador
+
+1. Abre **Code** en el repositorio.
+2. Selecciona **Add file → Upload files**.
+3. Arrastra los tres archivos.
+4. Confirma que GitHub indique que reemplazará los existentes.
+5. Pulsa **Commit changes**.
+6. Abre **Actions → Actualizar y publicar monitor**.
+7. Pulsa **Run workflow** o espera el siguiente horario programado.
+8. Cuando termine en verde, abre GitHub Pages y presiona `Ctrl + F5`.
+
+## Qué revisar en Actions
+
+En el paso **Ejecutar monitor**, la nueva versión muestra datos como:
+
+```text
+«consulta» → N resultados / M fuentes chilenas
+sitemap La Tercera → N candidatos temáticos
+UAF.cl directo → N noticias recientes
+prensa chilena única: N · cuerpos extraídos: N · extranjeros descartados: N
+```
+
+En `datos.json` puedes confirmar:
+
+```json
+{
+  "version_motor": "4.0-cuerpo-completo-chile",
+  "cobertura_tecnica": {
+    "cuerpos_extraidos": 0,
+    "fuentes_institucionales": 0,
+    "solo_fuentes_chilenas": true
+  }
+}
+```
+
+Los números serán diferentes en cada ejecución.
+
+## Limitaciones
+
+- Algunos medios pueden bloquear temporalmente la extracción automatizada o modificar su estructura HTML.
+- Los buscadores no garantizan entregar todos los resultados indexados.
+- Los sitemaps pueden cambiar de ubicación o limitar el número de noticias recientes.
+- La clasificación temática y de roles es automática y debe validarse antes de utilizarla en informes institucionales.
+- No se realiza scraping de resultados generales de Google con una sesión de usuario. Se utilizan Google News RSS, consultas por dominio, sitemaps publicados y páginas públicas de los medios.
