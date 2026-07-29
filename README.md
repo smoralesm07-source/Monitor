@@ -137,10 +137,29 @@ detecta la mención aunque el titular no diga nada y aunque ningún buscador la 
 | `.github/workflows/monitor.yml` | reemplazar (revisa que el nombre coincida con tu workflow actual; si el tuyo se llama distinto, borra el antiguo) |
 | `README.md` | reemplazar |
 | `.gitignore` | reemplazar |
+| `index.html` | reemplazar (opcional, ver abajo) |
 
-**`index.html` no cambia.** El esquema de `datos.json` es retrocompatible: se conservan todos los
-campos que el dashboard ya usaba y solo se agregaron `nivel_fuente`, `uaf_puntaje`,
-`uaf_menciones` y `niveles_fuente` en las métricas.
+### Sobre `index.html`
+
+El motor v5.0 funciona con el `index.html` de la versión 4.0 sin tocar nada: el esquema de
+`datos.json` es retrocompatible y solo se agregaron campos nuevos (`nivel_fuente`,
+`nivel_fuente_label`, `uaf_puntaje`, `uaf_menciones` y `niveles_fuente` en las métricas).
+
+La versión incluida aquí aprovecha esos campos, con cambios acotados sobre el mismo diseño:
+
+- **Filtro «Validación UAF»**: aísla las menciones de confianza `alta` o revisa las de confianza
+  `media`, que son las que conviene validar a mano.
+- **Filtro «Nivel de fuente»**: separa medio verificado, dominio `.cl` y fuente institucional.
+- **Trazabilidad visible**: cada noticia UAF muestra su validación, el nivel de la fuente y el
+  puntaje con que el motor tomó la decisión.
+- **Enlaces saneados en el navegador** (`safeUrl`): solo se abren `http`/`https`, como segunda
+  barrera frente a un enlace manipulado en el JSON.
+- **Cobertura técnica en el pie**: artículos con cuerpo leído, dominios con feed propio, dominios
+  con news-sitemap, URL en memoria de barrido y si se respetó `robots.txt`.
+
+Se validó renderizando el tablero completo con jsdom: sin errores de JavaScript, filtros y chips
+operativos, y una carga con `javascript:` e `<img onerror>` inyectados en `datos.json` queda
+neutralizada.
 
 ### Desde el navegador
 
