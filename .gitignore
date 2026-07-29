@@ -1,0 +1,7 @@
+config.json
+monitor.log
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+public/
+.DS_Store

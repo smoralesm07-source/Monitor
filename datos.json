@@ -1,0 +1,384 @@
+{
+ "generado": "2026-07-28T14:00:00-04:00",
+ "generado_legible": "28/07/2026 14:00",
+ "ventana": {
+  "dias": [
+   "2026-07-24",
+   "2026-07-25",
+   "2026-07-26",
+   "2026-07-27",
+   "2026-07-28"
+  ],
+  "hoy": "2026-07-28",
+  "largo": 5
+ },
+ "metricas": {
+  "uaf_total": 0,
+  "uaf_prensa": 0,
+  "uaf_social": 0,
+  "uaf_donde": [],
+  "volumen": 6,
+  "volumen_hoy": 1,
+  "dias_con_actividad": 4,
+  "dias_ventana": 5,
+  "medios_unicos": 6,
+  "casos_activos": 2,
+  "precedentes_distintos": 2,
+  "fenomenos": [
+   {
+    "clave": "sartor",
+    "label": "Caso Sartor AGF",
+    "n": 4,
+    "medios": 4,
+    "dias": [
+     "2026-07-24",
+     "2026-07-27",
+     "2026-07-28"
+    ],
+    "uaf": 0,
+    "precedentes": [
+     "Delitos económicos"
+    ]
+   },
+   {
+    "clave": "trata",
+    "label": "Trata de personas",
+    "n": 2,
+    "medios": 2,
+    "dias": [
+     "2026-07-26",
+     "2026-07-27"
+    ],
+    "uaf": 0,
+    "precedentes": [
+     "Trata y tráfico de personas"
+    ]
+   }
+  ],
+  "precedentes": [
+   {
+    "clave": "economicos",
+    "label": "Delitos económicos",
+    "n": 4
+   },
+   {
+    "clave": "trata",
+    "label": "Trata y tráfico de personas",
+    "n": 2
+   }
+  ],
+  "naturalezas": [
+   {
+    "clave": "judicial",
+    "label": "Judicial",
+    "n": 5
+   },
+   {
+    "clave": "policial",
+    "label": "Policial",
+    "n": 1
+   }
+  ],
+  "cronologia": [
+   {
+    "clave": "sartor",
+    "label": "Caso Sartor AGF",
+    "celdas": [
+     {
+      "dia": "2026-07-24",
+      "n": 1,
+      "medios": [
+       "Diario Financiero"
+      ]
+     },
+     {
+      "dia": "2026-07-25",
+      "n": 0,
+      "medios": []
+     },
+     {
+      "dia": "2026-07-26",
+      "n": 0,
+      "medios": []
+     },
+     {
+      "dia": "2026-07-27",
+      "n": 2,
+      "medios": [
+       "La Tercera",
+       "RedGol"
+      ]
+     },
+     {
+      "dia": "2026-07-28",
+      "n": 1,
+      "medios": [
+       "El Mostrador"
+      ]
+     }
+    ],
+    "total": 4
+   },
+   {
+    "clave": "trata",
+    "label": "Trata de personas",
+    "celdas": [
+     {
+      "dia": "2026-07-24",
+      "n": 0,
+      "medios": []
+     },
+     {
+      "dia": "2026-07-25",
+      "n": 0,
+      "medios": []
+     },
+     {
+      "dia": "2026-07-26",
+      "n": 1,
+      "medios": [
+       "La Razón"
+      ]
+     },
+     {
+      "dia": "2026-07-27",
+      "n": 1,
+      "medios": [
+       "El America"
+      ]
+     },
+     {
+      "dia": "2026-07-28",
+      "n": 0,
+      "medios": []
+     }
+    ],
+    "total": 2
+   }
+  ],
+  "por_dia": {
+   "2026-07-24": 1,
+   "2026-07-25": 0,
+   "2026-07-26": 1,
+   "2026-07-27": 3,
+   "2026-07-28": 1
+  },
+  "plataformas": [
+   {
+    "id": "reddit",
+    "nombre": "Reddit",
+    "estado": "monitoreado",
+    "nota": "Búsqueda pública vía RSS en r/chile. Sin autenticación.",
+    "menciones": 0,
+    "menciones_uaf": 0,
+    "interacciones": 0
+   },
+   {
+    "id": "bluesky",
+    "nombre": "Bluesky",
+    "estado": "monitoreado",
+    "nota": "API pública de búsqueda de posts. Sin autenticación.",
+    "menciones": 0,
+    "menciones_uaf": 0,
+    "interacciones": 0
+   },
+   {
+    "id": "x",
+    "nombre": "X (Twitter)",
+    "estado": "sin_acceso",
+    "nota": "La búsqueda exige API de pago desde 2023. Sin ella no se puede afirmar que haya o no figuración.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   },
+   {
+    "id": "instagram",
+    "nombre": "Instagram",
+    "estado": "sin_acceso",
+    "nota": "Graph API solo entrega datos de cuentas propias verificadas. No permite búsqueda por palabra clave.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   },
+   {
+    "id": "facebook",
+    "nombre": "Facebook",
+    "estado": "sin_acceso",
+    "nota": "CrowdTangle cerró en agosto de 2024. El reemplazo está restringido a investigadores acreditados.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   },
+   {
+    "id": "tiktok",
+    "nombre": "TikTok",
+    "estado": "sin_acceso",
+    "nota": "Research API limitada a instituciones académicas aprobadas.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   },
+   {
+    "id": "linkedin",
+    "nombre": "LinkedIn",
+    "estado": "sin_acceso",
+    "nota": "Sin API de búsqueda pública. Es donde circula el debate de cumplimiento, así que es un punto ciego relevante.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   }
+  ],
+  "social_total": 0,
+  "social_monitoreadas": 2,
+  "social_sin_acceso": 5
+ },
+ "prensa": [
+  {
+   "id": "a1",
+   "canal": "prensa",
+   "fecha": "2026-07-28",
+   "hora": "04:00",
+   "medio": "El Mostrador",
+   "titulo": "Fiscalía suma lavado de activos al caso Sartor antes de la formalización",
+   "resumen": "La Fiscalía Oriente amplió los delitos por los que formalizará el jueves 30 a 11 personas vinculadas a Sartor AGF. A la administración desleal, negociación incompatible, entrega de información falsa al mercado y estafa se sumaron lavado de activos y fraude por omisión de una OPA.",
+   "link": "https://www.elmostrador.cl/noticias/multimedia/clic-am/2026/07/28/clicam-fiscalia-suma-lavado-de-activos-al-caso-sartor-y-chile-negocia-aranceles/",
+   "fenomeno": "sartor",
+   "fenomeno_label": "Caso Sartor AGF",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "economicos"
+   ],
+   "precedentes_label": [
+    "Delitos económicos"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a3",
+   "canal": "prensa",
+   "fecha": "2026-07-27",
+   "hora": "18:31",
+   "medio": "El America",
+   "titulo": "Corte de Antofagasta confirma prisión preventiva por trata de personas y lavado de activos en Calama",
+   "resumen": "La Corte de Apelaciones confirmó la prisión preventiva de cinco ciudadanos peruanos formalizados por la Fiscalía de Calama como presuntos autores de trata con fines de explotación sexual, lavado de activos y asociación criminal.",
+   "link": "https://elamerica.cl/2026/07/27/prision-efectiva-para-4-peruanos-por-trata-de-personas-y-prostitucion-en-calama/",
+   "fenomeno": "trata",
+   "fenomeno_label": "Trata de personas",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "trata"
+   ],
+   "precedentes_label": [
+    "Trata y tráfico de personas"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a2",
+   "canal": "prensa",
+   "fecha": "2026-07-27",
+   "hora": "18:00",
+   "medio": "La Tercera",
+   "titulo": "Caso Sartor: Fiscalía agrega dos delitos y querellantes anticipan que pedirán prisión preventiva",
+   "resumen": "El fiscal de Alta Complejidad Juan Pablo Araya amplió los cargos contra los once imputados. El lavado de activos tiene fecha de inicio en octubre de 2022. La CMF ya cursó multas contra ocho de ellos por 367.500 UF, unos US$ 14 millones.",
+   "link": "https://www.latercera.com/pulso/noticia/caso-sartor-fiscalia-agrega-dos-nuevos-delitos-a-imputados-y-querellantes-anticipan-que-pediran-prision-preventiva/",
+   "fenomeno": "sartor",
+   "fenomeno_label": "Caso Sartor AGF",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "economicos"
+   ],
+   "precedentes_label": [
+    "Delitos económicos"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a4",
+   "canal": "prensa",
+   "fecha": "2026-07-27",
+   "hora": "12:00",
+   "medio": "RedGol",
+   "titulo": "Caso Sartor: pedirán prisión preventiva para el expresidente de Azul Azul, Michael Clark",
+   "resumen": "Cobertura del hito del 30 de julio con foco en Michael Clark. Confirma que la semana anterior se sumaron los delitos de fraude por omisión de OPA y lavado de activos al pliego original.",
+   "link": "https://redgol.cl/udechile/formalizacion-en-caso-sartor-pediran-prision-preventiva-para-el-expresidente-de-la-u-michael-clark",
+   "fenomeno": "sartor",
+   "fenomeno_label": "Caso Sartor AGF",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "economicos"
+   ],
+   "precedentes_label": [
+    "Delitos económicos"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a5",
+   "canal": "prensa",
+   "fecha": "2026-07-26",
+   "hora": "11:00",
+   "medio": "La Razón",
+   "titulo": "Fiscalía y PDI desarticulan red de trata de personas con lavado de activos en Calama",
+   "resumen": "Seis personas de nacionalidad peruana fueron detenidas y formalizadas por trata con fines de explotación sexual, lavado de activos y asociación criminal. El operativo de la PDI puso a resguardo a una decena de mujeres captadas con ofertas laborales falsas.",
+   "link": "https://www.larazon.cl/2026/07/26/fiscalia-y-pdi-desarticulan-red-de-trata-de-personas-con-fines-de-explotacion-sexual-que-operaba-en-inmuebles-de-calama/",
+   "fenomeno": "trata",
+   "fenomeno_label": "Trata de personas",
+   "naturaleza": "policial",
+   "naturaleza_label": "Policial",
+   "precedentes": [
+    "trata"
+   ],
+   "precedentes_label": [
+    "Trata y tráfico de personas"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a6",
+   "canal": "prensa",
+   "fecha": "2026-07-24",
+   "hora": "15:30",
+   "medio": "Diario Financiero",
+   "titulo": "Caso Sartor: Fiscalía pide ampliar delitos y añade lavado de activos y fraude por omisión de OPA",
+   "resumen": "Mediante escrito al Cuarto Juzgado de Garantía de Santiago, el fiscal Araya solicitó ampliar la formalización de los 11 imputados por administración desleal y entrega de información falsa al mercado. Marca el ingreso del lavado de activos al caso financiero más relevante en tramitación.",
+   "link": "https://www.df.cl/mercados/fondos-de-inversion/caso-sartor-fiscalia-pide-ampliar-delitos-para-formalizacion-y-anade",
+   "fenomeno": "sartor",
+   "fenomeno_label": "Caso Sartor AGF",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "economicos"
+   ],
+   "precedentes_label": [
+    "Delitos económicos"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  }
+ ],
+ "social": [],
+ "nuevos": 0,
+ "consultas": 13
+}

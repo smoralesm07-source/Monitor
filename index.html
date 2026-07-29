@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Monitor UAF · Lavado de activos en Chile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Public+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#12203A; --ink-soft:#4A5875; --ink-dim:#8A96AE;
+  --paper:#E9EDF3; --surface:#FFFFFF;
+  --rule:#C6D0E0; --rule-soft:#DFE5EE;
+  --live:#D64500; --ok:#2D6A4F; --alert:#8A5A00;
+  --n-policial:#B3261E; --n-judicial:#1F5673; --n-politico:#7A4E9E;
+  --n-normativo:#2D6A4F; --n-crimen:#8C1F3D; --n-investigacion:#8A5A00;
+  --n-institucional:#3C6E8F; --n-analisis:#5B4B8A;
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  --body:'Public Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --display:'Bricolage Grotesque','Public Sans',system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--body);background:var(--paper);color:var(--ink);line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1240px;margin:0 auto;padding:26px 22px 64px}
+
+/* barra vigilancia */
+.watch{position:sticky;top:0;z-index:50;background:var(--ink);color:#fff;padding:11px 22px;margin:-26px -22px 0;display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex-shrink:0;animation:blink 3s ease-in-out infinite}
+.dot.err{background:#8A96AE;animation:none}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dot{animation:none}}
+.watch b{color:#fff;font-weight:600}
+.watch .dim{color:#93A3C0}
+.watch .grow{flex:1}
+.newpill{background:var(--live);color:#fff;padding:3px 9px;font-weight:600;letter-spacing:.05em;cursor:pointer;border:none;font-family:var(--mono);font-size:11px}
+.watch button.link{background:none;border:1px solid #2F4166;color:#CBD6E8;font-family:var(--mono);font-size:11px;padding:4px 10px;cursor:pointer}
+.watch button.link:hover{background:#1D3157;color:#fff}
+.watch button:focus-visible{outline:2px solid var(--live);outline-offset:1px}
+
+/* cabecera */
+.masthead{border-top:3px solid var(--ink);padding-top:18px;margin-top:26px;margin-bottom:16px}
+.masthead-top{display:flex;justify-content:space-between;align-items:baseline;gap:24px;flex-wrap:wrap}
+.masthead h1{font-family:var(--display);font-weight:800;font-size:clamp(26px,4vw,42px);letter-spacing:-.028em;line-height:1.03}
+.masthead h1 .thin{font-weight:600;color:var(--ink-soft)}
+.clock{font-family:var(--mono);font-size:12px;color:var(--ink-soft);text-align:right;line-height:1.7;white-space:nowrap}
+.clock b{color:var(--ink);font-weight:600}
+
+/* ── INDICADOR UAF (héroe) ── */
+.uafbar{border:2px solid var(--ink);margin-bottom:14px;display:grid;grid-template-columns:auto 1fr;background:var(--surface)}
+.uafbar.ausente{border-color:var(--alert)}
+.uafbar.presente{border-color:var(--ok)}
+.uaf-left{padding:26px 30px;border-right:2px solid var(--ink);display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:250px}
+.uafbar.ausente .uaf-left{border-right-color:var(--alert);background:#FFFBF2}
+.uafbar.presente .uaf-left{border-right-color:var(--ok);background:#F3FAF5}
+.uaf-k{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:10px;text-align:center}
+.uaf-v{font-family:var(--display);font-weight:800;font-size:52px;line-height:.95;letter-spacing:-.04em;text-align:center}
+.uafbar.ausente .uaf-v{font-size:30px;color:var(--alert);letter-spacing:-.02em}
+.uafbar.presente .uaf-v{color:var(--ok)}
+.uaf-sub{font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-top:9px;text-align:center;line-height:1.6}
+.uaf-right{padding:22px 26px;display:flex;flex-direction:column;justify-content:center}
+.uaf-right p{font-size:14.5px;color:#33405C;max-width:78ch;margin-bottom:12px}
+.uaf-right p:last-child{margin-bottom:0}
+.uaf-right strong{font-weight:600;color:var(--ink)}
+.uaf-split{display:flex;gap:0;border-top:1px solid var(--rule-soft);padding-top:13px;margin-top:4px;flex-wrap:wrap}
+.uaf-cell{padding-right:22px;margin-right:22px;border-right:1px solid var(--rule-soft);font-family:var(--mono);font-size:11.5px;color:var(--ink-soft)}
+.uaf-cell:last-child{border-right:none;margin-right:0;padding-right:0}
+.uaf-cell b{color:var(--ink);font-weight:600;font-size:14px}
+.uaf-hits{list-style:none;margin-top:10px}
+.uaf-hits li{font-size:13.5px;padding:7px 0;border-bottom:1px dotted var(--rule)}
+.uaf-hits li:last-child{border-bottom:none}
+.uaf-hits .m{font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-right:9px}
+.uaf-hits a{color:var(--n-judicial);text-decoration:none;border-bottom:1px solid currentColor}
+
+/* métricas simples */
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);margin-bottom:14px}
+.metric{background:var(--surface);padding:15px 17px 14px}
+.metric .k{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:7px;line-height:1.5}
+.metric .v{font-family:var(--display);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.04em}
+.metric .v small{font-size:15px;font-weight:600;color:var(--ink-soft);letter-spacing:0}
+.metric .d{font-family:var(--mono);font-size:10.5px;margin-top:7px;color:var(--ink-soft);line-height:1.5}
+.spark{display:flex;align-items:flex-end;gap:3px;height:22px;margin-top:8px}
+.spark i{flex:1;background:var(--rule);min-height:2px}
+.spark i.has{background:var(--n-judicial)}
+.spark i.now{background:var(--live)}
+
+/* bloques */
+.block{background:var(--surface);border:1px solid var(--rule);padding:20px 22px 22px;margin-bottom:14px}
+.block-head{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+.block-head h2{font-family:var(--display);font-weight:800;font-size:15px}
+.block-head .hint{font-family:var(--mono);font-size:11px;color:var(--ink-soft)}
+.block .lead{font-size:13px;color:var(--ink-soft);margin-bottom:16px;max-width:92ch}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:14px}
+
+/* riel */
+.rail{display:grid;grid-template-columns:repeat(5,1fr);border-left:1px solid var(--rule-soft)}
+.day{border-right:1px solid var(--rule-soft);border-top:none;border-bottom:none;background:none;padding:0;text-align:left;cursor:pointer;font:inherit;color:inherit;transition:background .15s}
+.day:hover{background:#F4F7FB}
+.day:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+.day.on{background:#EDF3FA}
+.day.is-today{background:#FFF4EE}
+.day.is-today.on{background:#FFE9DD}
+.day-label{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);padding:9px 10px 0}
+.day.is-today .day-label{color:var(--live)}
+.day-num{font-family:var(--display);font-weight:800;font-size:24px;letter-spacing:-.03em;padding:0 10px;line-height:1.1}
+.ticks{display:flex;flex-direction:column;gap:3px;padding:9px 10px 13px;min-height:74px;justify-content:flex-end}
+.tick{height:7px}
+.ticks .none{font-family:var(--mono);font-size:10px;color:#93A0B8}
+
+/* CRONOLOGÍA DE CASOS */
+.crono-head{display:grid;gap:4px;margin-bottom:6px}
+.crono-row{display:grid;gap:4px;align-items:center;margin-bottom:4px}
+.crono-name{font-size:13px;font-weight:600;padding-right:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crono-date{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);text-align:center;padding-bottom:4px;border-bottom:1px solid var(--rule-soft)}
+.crono-date.hoy{color:var(--live)}
+.crono-cell{height:34px;background:#F2F5F9;border:1px solid var(--rule-soft);display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:var(--mono);line-height:1.1;cursor:default}
+.crono-cell.n1{background:#D4E2F0;border-color:#B3CBE3}
+.crono-cell.n2{background:#9DBEDC;border-color:#7FA6CB}
+.crono-cell.n3{background:#5D8CBA;border-color:#4A7BA7;color:#fff}
+.crono-cell .num{font-size:14px;font-weight:600}
+.crono-cell .med{font-size:8.5px;opacity:.75}
+.crono-legend{display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-top:12px;padding-top:11px;border-top:1px solid var(--rule-soft)}
+.crono-legend i{display:inline-block;width:16px;height:11px;margin-right:6px;vertical-align:-1px;border:1px solid var(--rule-soft)}
+
+/* barras */
+.bars{display:flex;flex-direction:column;gap:10px}
+.bar-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+.bar-label{font-size:13px;display:flex;align-items:center;gap:8px;min-width:0}
+.bar-label span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sw{width:9px;height:9px;flex-shrink:0}
+.bar-val{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink-soft)}
+.bar-track{grid-column:1/-1;height:6px;background:var(--rule-soft)}
+.bar-fill{height:100%;transition:width .5s cubic-bezier(.2,.8,.2,1)}
+@media (prefers-reduced-motion:reduce){.bar-fill{transition:none}}
+
+/* fichas de caso */
+.caso{border:1px solid var(--rule);padding:15px 17px;margin-bottom:10px;background:#FBFCFE}
+.caso:last-child{margin-bottom:0}
+.caso h3{font-family:var(--display);font-weight:800;font-size:15.5px;margin-bottom:8px}
+.caso-stats{display:flex;gap:0;flex-wrap:wrap;margin-bottom:10px}
+.caso-stat{padding-right:16px;margin-right:16px;border-right:1px solid var(--rule-soft);font-family:var(--mono);font-size:11px;color:var(--ink-soft)}
+.caso-stat:last-child{border-right:none;margin-right:0}
+.caso-stat b{color:var(--ink);font-weight:600;font-size:14px}
+.caso-prec{font-size:12.5px;color:var(--ink-soft);border-top:1px dotted var(--rule);padding-top:9px}
+.caso-prec b{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;display:block;margin-bottom:4px;color:var(--ink-soft)}
+.pill{display:inline-block;background:#E7EDF5;border:1px solid #C0CFE0;padding:2px 8px;margin:2px 4px 2px 0;font-size:12px;color:var(--ink)}
+.pill.uaf{background:#F3FAF5;border-color:#A9CDB6;color:var(--ok);font-weight:600}
+.pill.none{background:#FFF8E8;border-color:#E8D5A0;color:var(--alert)}
+
+/* ── REDES SOCIALES ── */
+.social-block{background:var(--surface);border:1px solid var(--rule);padding:20px 22px 22px;margin-bottom:14px}
+.plat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(228px,1fr));gap:1px;background:var(--rule-soft);border:1px solid var(--rule-soft);margin-bottom:16px}
+.plat{background:var(--surface);padding:15px 16px}
+.plat.sinacceso{background:#FBFAF6}
+.plat-top{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.plat-name{font-family:var(--display);font-weight:800;font-size:14.5px}
+.plat-badge{font-family:var(--mono);font-size:8.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;padding:2px 6px;margin-left:auto;white-space:nowrap}
+.plat-badge.mon{background:#EAF3EE;color:var(--ok);border:1px solid #A9CDB6}
+.plat-badge.sin{background:#F5F2EA;color:var(--alert);border:1px solid #DDD0AE}
+.plat-v{font-family:var(--display);font-weight:800;font-size:29px;line-height:1;letter-spacing:-.035em;margin-bottom:3px}
+.plat-v.cero{color:var(--alert)}
+.plat-v.nd{font-size:16px;color:var(--ink-dim);letter-spacing:-.01em}
+.plat-state{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-bottom:9px}
+.plat-note{font-size:12px;color:var(--ink-soft);line-height:1.5;border-top:1px dotted var(--rule);padding-top:8px}
+.social-verdict{border:1px solid var(--rule);border-left:4px solid var(--alert);background:#FFFBF2;padding:15px 18px;font-size:14px;color:#4A3B14;max-width:96ch}
+.social-verdict b{color:var(--ink);font-weight:600}
+.social-verdict p+p{margin-top:8px}
+.social-posts{margin-top:16px;border-top:1px solid var(--rule-soft);padding-top:14px}
+.post{display:grid;grid-template-columns:112px 1fr;gap:15px;padding:12px 0;border-bottom:1px solid var(--rule-soft)}
+.post:last-child{border-bottom:none}
+.post-meta{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);line-height:1.7}
+.post-meta b{display:block;color:var(--ink);font-weight:600}
+.post p{font-size:13.5px;color:#33405C}
+
+/* filtros */
+.filters{background:var(--surface);border:1px solid var(--rule);padding:18px 22px 20px;margin-bottom:20px}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:13px;margin-bottom:13px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+.field input,.field select{font-family:var(--body);font-size:14px;padding:9px 10px;border:1px solid var(--rule);background:#FBFCFE;color:var(--ink);border-radius:0}
+.field input:focus,.field select:focus{outline:2px solid var(--ink);outline-offset:-1px;background:#fff}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.btn{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;padding:10px 16px;border:1px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer}
+.btn:hover{background:#E3E9F2}
+.btn:focus-visible{outline:2px solid var(--live);outline-offset:2px}
+.count{font-family:var(--mono);font-size:12px;color:var(--ink-soft);margin-left:auto}
+
+/* registros */
+.records{border-top:1px solid var(--rule)}
+.rec{display:grid;grid-template-columns:100px 1fr;gap:19px;padding:19px 0;border-bottom:1px solid var(--rule-soft)}
+.rec.fresh{background:#FFF9F5;box-shadow:-8px 0 0 var(--live)}
+.rec-meta{font-family:var(--mono);font-size:11px;line-height:1.75;color:var(--ink-soft)}
+.rec-date{font-weight:600;color:var(--ink);display:block}
+.tag{display:inline-block;margin-top:6px;padding:2px 6px;color:#fff;font-size:9.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase}
+.rec h3{font-family:var(--display);font-weight:600;font-size:18.5px;letter-spacing:-.014em;line-height:1.3;margin-bottom:7px}
+.rec p{font-size:14.5px;color:#33405C;margin-bottom:11px;max-width:84ch}
+.rec-foot{display:flex;gap:11px;align-items:center;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--ink-soft)}
+.rec-foot a{color:var(--n-judicial);font-weight:600;text-decoration:none;border-bottom:1px solid currentColor}
+.chip{padding:2px 7px;border:1px solid var(--rule);background:#F5F8FC}
+.chip.prec{background:#FDF6EC;border-color:#E3D3B8;color:#6E5220}
+.chip.uaf{background:#EAF3EE;border-color:#A9CDB6;color:var(--ok);font-weight:600}
+.chip.new{background:var(--live);border-color:var(--live);color:#fff;font-weight:600}
+.empty{padding:44px 0;text-align:center;font-family:var(--mono);font-size:13px;color:var(--ink-soft)}
+footer{border-top:1px solid var(--rule);margin-top:32px;padding-top:17px;font-family:var(--mono);font-size:11px;color:var(--ink-soft);line-height:1.9}
+
+@media (max-width:900px){
+  .uafbar{grid-template-columns:1fr}
+  .uaf-left{border-right:none;border-bottom:2px solid var(--ink);min-width:0}
+  .uafbar.ausente .uaf-left{border-bottom-color:var(--alert)}
+  .uafbar.presente .uaf-left{border-bottom-color:var(--ok)}
+}
+@media (max-width:820px){
+  .watch{position:static}
+  .day-num{font-size:18px}
+  .rec,.post{grid-template-columns:1fr;gap:9px}
+  .crono-name{white-space:normal}
+}
+@media print{.watch,.filters{display:none}body{background:#fff}}
+</style>
+</head>
+<body>
+
+<div class="watch">
+  <span class="dot" id="dot" aria-hidden="true"></span>
+  <span id="watchState"><b>Vigilancia activa</b></span>
+  <span class="dim" id="watchStamp"></span>
+  <span class="grow"></span>
+  <button class="newpill" id="newPill" type="button" hidden></button>
+  <button class="link" id="btnCheck" type="button">Comprobar ahora</button>
+  <button class="link" id="btnAuto" type="button">Auto: 5 min</button>
+</div>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="masthead-top">
+    <h1>Monitor de lavado de activos<br><span class="thin">Prensa y redes sociales · Chile</span></h1>
+    <div class="clock" id="clock"></div>
+  </div>
+</header>
+
+<!-- 1 · INDICADOR UAF -->
+<section id="uafbar"></section>
+
+<!-- 2 · MÉTRICAS -->
+<div class="metrics" id="metrics"></div>
+
+<!-- 3 · CASOS Y CRONOLOGÍA -->
+<div class="cols">
+  <section class="block">
+    <div class="block-head"><h2>Riel de señal</h2><span class="hint">Toca un día para filtrar</span></div>
+    <p class="lead">Cada marca es un registro, coloreada por tipo de información.</p>
+    <div class="rail" id="rail"></div>
+  </section>
+
+  <section class="block">
+    <div class="block-head"><h2>Casos detectados</h2></div>
+    <p class="lead">Cada caso con su alcance y el delito que origina los activos.</p>
+    <div id="casos"></div>
+  </section>
+</div>
+
+<section class="block">
+  <div class="block-head"><h2>Cronología de casos</h2><span class="hint">Intensidad diaria por caso</span></div>
+  <p class="lead">Cada fila es un caso; cada columna, un día con su fecha. El número es la
+     cantidad de registros y debajo va cuántos medios distintos lo cubrieron ese día.
+     Deja ver qué días se movió cada causa y cuándo entró o salió de la agenda.</p>
+  <div id="crono"></div>
+</section>
+
+<div class="cols">
+  <section class="block">
+    <div class="block-head"><h2>Delitos precedentes</h2></div>
+    <p class="lead">El ilícito que origina los activos que se intentan lavar. Un caso puede tener más de uno.</p>
+    <div class="bars" id="chartPrec"></div>
+  </section>
+  <section class="block">
+    <div class="block-head"><h2>Tipo de información</h2></div>
+    <p class="lead">Qué clase de hecho reporta cada registro.</p>
+    <div class="bars" id="chartNat"></div>
+  </section>
+  <section class="block">
+    <div class="block-head"><h2>Medios</h2></div>
+    <p class="lead">Origen de cada registro en el período.</p>
+    <div class="bars" id="chartMedia"></div>
+  </section>
+</div>
+
+<!-- 4 · REDES SOCIALES -->
+<section class="social-block">
+  <div class="block-head">
+    <h2>Figuración de la UAF en redes sociales</h2>
+    <span class="hint" id="socStamp"></span>
+  </div>
+  <p class="lead">Estado por plataforma. Distingue entre lo que se consultó y no arrojó
+     resultados, y lo que no se pudo consultar: la ausencia de datos significa cosas
+     distintas en cada caso.</p>
+  <div class="plat-grid" id="plataformas"></div>
+  <div id="socVerdict"></div>
+  <div id="socPosts"></div>
+</section>
+
+<!-- 5 · REGISTROS -->
+<section class="filters">
+  <div class="fgrid">
+    <div class="field"><label for="q">Buscar</label><input type="text" id="q" placeholder="Sartor, Calama, prisión…" autocomplete="off"></div>
+    <div class="field"><label for="fDay">Día</label><select id="fDay"><option value="">Todos</option></select></div>
+    <div class="field"><label for="fPhenom">Caso</label><select id="fPhenom"><option value="">Todos</option></select></div>
+    <div class="field"><label for="fPrec">Delito precedente</label><select id="fPrec"><option value="">Todos</option></select></div>
+    <div class="field"><label for="fNature">Tipo de información</label><select id="fNature"><option value="">Todos</option></select></div>
+    <div class="field"><label for="fMedia">Medio</label><select id="fMedia"><option value="">Todos</option></select></div>
+    <div class="field"><label for="fUaf">Mención UAF</label><select id="fUaf"><option value="">Indiferente</option><option value="si">Solo con mención</option><option value="no">Solo sin mención</option></select></div>
+  </div>
+  <div class="actions">
+    <button class="btn" id="btnReset" type="button">Limpiar</button>
+    <span class="count" id="count"></span>
+  </div>
+</section>
+
+<div class="records" id="records"></div>
+
+<footer id="foot"></footer>
+
+</div>
+
+<script>
+const SEMILLA = {
+ "generado": "2026-07-28T14:00:00-04:00",
+ "generado_legible": "28/07/2026 14:00",
+ "ventana": {
+  "dias": [
+   "2026-07-24",
+   "2026-07-25",
+   "2026-07-26",
+   "2026-07-27",
+   "2026-07-28"
+  ],
+  "hoy": "2026-07-28",
+  "largo": 5
+ },
+ "metricas": {
+  "uaf_total": 0,
+  "uaf_prensa": 0,
+  "uaf_social": 0,
+  "uaf_donde": [],
+  "volumen": 6,
+  "volumen_hoy": 1,
+  "dias_con_actividad": 4,
+  "dias_ventana": 5,
+  "medios_unicos": 6,
+  "casos_activos": 2,
+  "precedentes_distintos": 2,
+  "fenomenos": [
+   {
+    "clave": "sartor",
+    "label": "Caso Sartor AGF",
+    "n": 4,
+    "medios": 4,
+    "dias": [
+     "2026-07-24",
+     "2026-07-27",
+     "2026-07-28"
+    ],
+    "uaf": 0,
+    "precedentes": [
+     "Delitos económicos"
+    ]
+   },
+   {
+    "clave": "trata",
+    "label": "Trata de personas",
+    "n": 2,
+    "medios": 2,
+    "dias": [
+     "2026-07-26",
+     "2026-07-27"
+    ],
+    "uaf": 0,
+    "precedentes": [
+     "Trata y tráfico de personas"
+    ]
+   }
+  ],
+  "precedentes": [
+   {
+    "clave": "economicos",
+    "label": "Delitos económicos",
+    "n": 4
+   },
+   {
+    "clave": "trata",
+    "label": "Trata y tráfico de personas",
+    "n": 2
+   }
+  ],
+  "naturalezas": [
+   {
+    "clave": "judicial",
+    "label": "Judicial",
+    "n": 5
+   },
+   {
+    "clave": "policial",
+    "label": "Policial",
+    "n": 1
+   }
+  ],
+  "cronologia": [
+   {
+    "clave": "sartor",
+    "label": "Caso Sartor AGF",
+    "celdas": [
+     {
+      "dia": "2026-07-24",
+      "n": 1,
+      "medios": [
+       "Diario Financiero"
+      ]
+     },
+     {
+      "dia": "2026-07-25",
+      "n": 0,
+      "medios": []
+     },
+     {
+      "dia": "2026-07-26",
+      "n": 0,
+      "medios": []
+     },
+     {
+      "dia": "2026-07-27",
+      "n": 2,
+      "medios": [
+       "La Tercera",
+       "RedGol"
+      ]
+     },
+     {
+      "dia": "2026-07-28",
+      "n": 1,
+      "medios": [
+       "El Mostrador"
+      ]
+     }
+    ],
+    "total": 4
+   },
+   {
+    "clave": "trata",
+    "label": "Trata de personas",
+    "celdas": [
+     {
+      "dia": "2026-07-24",
+      "n": 0,
+      "medios": []
+     },
+     {
+      "dia": "2026-07-25",
+      "n": 0,
+      "medios": []
+     },
+     {
+      "dia": "2026-07-26",
+      "n": 1,
+      "medios": [
+       "La Razón"
+      ]
+     },
+     {
+      "dia": "2026-07-27",
+      "n": 1,
+      "medios": [
+       "El America"
+      ]
+     },
+     {
+      "dia": "2026-07-28",
+      "n": 0,
+      "medios": []
+     }
+    ],
+    "total": 2
+   }
+  ],
+  "por_dia": {
+   "2026-07-24": 1,
+   "2026-07-25": 0,
+   "2026-07-26": 1,
+   "2026-07-27": 3,
+   "2026-07-28": 1
+  },
+  "plataformas": [
+   {
+    "id": "reddit",
+    "nombre": "Reddit",
+    "estado": "monitoreado",
+    "nota": "Búsqueda pública vía RSS en r/chile. Sin autenticación.",
+    "menciones": 0,
+    "menciones_uaf": 0,
+    "interacciones": 0
+   },
+   {
+    "id": "bluesky",
+    "nombre": "Bluesky",
+    "estado": "monitoreado",
+    "nota": "API pública de búsqueda de posts. Sin autenticación.",
+    "menciones": 0,
+    "menciones_uaf": 0,
+    "interacciones": 0
+   },
+   {
+    "id": "x",
+    "nombre": "X (Twitter)",
+    "estado": "sin_acceso",
+    "nota": "La búsqueda exige API de pago desde 2023. Sin ella no se puede afirmar que haya o no figuración.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   },
+   {
+    "id": "instagram",
+    "nombre": "Instagram",
+    "estado": "sin_acceso",
+    "nota": "Graph API solo entrega datos de cuentas propias verificadas. No permite búsqueda por palabra clave.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   },
+   {
+    "id": "facebook",
+    "nombre": "Facebook",
+    "estado": "sin_acceso",
+    "nota": "CrowdTangle cerró en agosto de 2024. El reemplazo está restringido a investigadores acreditados.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   },
+   {
+    "id": "tiktok",
+    "nombre": "TikTok",
+    "estado": "sin_acceso",
+    "nota": "Research API limitada a instituciones académicas aprobadas.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   },
+   {
+    "id": "linkedin",
+    "nombre": "LinkedIn",
+    "estado": "sin_acceso",
+    "nota": "Sin API de búsqueda pública. Es donde circula el debate de cumplimiento, así que es un punto ciego relevante.",
+    "menciones": null,
+    "menciones_uaf": null,
+    "interacciones": null
+   }
+  ],
+  "social_total": 0,
+  "social_monitoreadas": 2,
+  "social_sin_acceso": 5
+ },
+ "prensa": [
+  {
+   "id": "a1",
+   "canal": "prensa",
+   "fecha": "2026-07-28",
+   "hora": "04:00",
+   "medio": "El Mostrador",
+   "titulo": "Fiscalía suma lavado de activos al caso Sartor antes de la formalización",
+   "resumen": "La Fiscalía Oriente amplió los delitos por los que formalizará el jueves 30 a 11 personas vinculadas a Sartor AGF. A la administración desleal, negociación incompatible, entrega de información falsa al mercado y estafa se sumaron lavado de activos y fraude por omisión de una OPA.",
+   "link": "https://www.elmostrador.cl/noticias/multimedia/clic-am/2026/07/28/clicam-fiscalia-suma-lavado-de-activos-al-caso-sartor-y-chile-negocia-aranceles/",
+   "fenomeno": "sartor",
+   "fenomeno_label": "Caso Sartor AGF",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "economicos"
+   ],
+   "precedentes_label": [
+    "Delitos económicos"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a3",
+   "canal": "prensa",
+   "fecha": "2026-07-27",
+   "hora": "18:31",
+   "medio": "El America",
+   "titulo": "Corte de Antofagasta confirma prisión preventiva por trata de personas y lavado de activos en Calama",
+   "resumen": "La Corte de Apelaciones confirmó la prisión preventiva de cinco ciudadanos peruanos formalizados por la Fiscalía de Calama como presuntos autores de trata con fines de explotación sexual, lavado de activos y asociación criminal.",
+   "link": "https://elamerica.cl/2026/07/27/prision-efectiva-para-4-peruanos-por-trata-de-personas-y-prostitucion-en-calama/",
+   "fenomeno": "trata",
+   "fenomeno_label": "Trata de personas",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "trata"
+   ],
+   "precedentes_label": [
+    "Trata y tráfico de personas"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a2",
+   "canal": "prensa",
+   "fecha": "2026-07-27",
+   "hora": "18:00",
+   "medio": "La Tercera",
+   "titulo": "Caso Sartor: Fiscalía agrega dos delitos y querellantes anticipan que pedirán prisión preventiva",
+   "resumen": "El fiscal de Alta Complejidad Juan Pablo Araya amplió los cargos contra los once imputados. El lavado de activos tiene fecha de inicio en octubre de 2022. La CMF ya cursó multas contra ocho de ellos por 367.500 UF, unos US$ 14 millones.",
+   "link": "https://www.latercera.com/pulso/noticia/caso-sartor-fiscalia-agrega-dos-nuevos-delitos-a-imputados-y-querellantes-anticipan-que-pediran-prision-preventiva/",
+   "fenomeno": "sartor",
+   "fenomeno_label": "Caso Sartor AGF",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "economicos"
+   ],
+   "precedentes_label": [
+    "Delitos económicos"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a4",
+   "canal": "prensa",
+   "fecha": "2026-07-27",
+   "hora": "12:00",
+   "medio": "RedGol",
+   "titulo": "Caso Sartor: pedirán prisión preventiva para el expresidente de Azul Azul, Michael Clark",
+   "resumen": "Cobertura del hito del 30 de julio con foco en Michael Clark. Confirma que la semana anterior se sumaron los delitos de fraude por omisión de OPA y lavado de activos al pliego original.",
+   "link": "https://redgol.cl/udechile/formalizacion-en-caso-sartor-pediran-prision-preventiva-para-el-expresidente-de-la-u-michael-clark",
+   "fenomeno": "sartor",
+   "fenomeno_label": "Caso Sartor AGF",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "economicos"
+   ],
+   "precedentes_label": [
+    "Delitos económicos"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a5",
+   "canal": "prensa",
+   "fecha": "2026-07-26",
+   "hora": "11:00",
+   "medio": "La Razón",
+   "titulo": "Fiscalía y PDI desarticulan red de trata de personas con lavado de activos en Calama",
+   "resumen": "Seis personas de nacionalidad peruana fueron detenidas y formalizadas por trata con fines de explotación sexual, lavado de activos y asociación criminal. El operativo de la PDI puso a resguardo a una decena de mujeres captadas con ofertas laborales falsas.",
+   "link": "https://www.larazon.cl/2026/07/26/fiscalia-y-pdi-desarticulan-red-de-trata-de-personas-con-fines-de-explotacion-sexual-que-operaba-en-inmuebles-de-calama/",
+   "fenomeno": "trata",
+   "fenomeno_label": "Trata de personas",
+   "naturaleza": "policial",
+   "naturaleza_label": "Policial",
+   "precedentes": [
+    "trata"
+   ],
+   "precedentes_label": [
+    "Trata y tráfico de personas"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  },
+  {
+   "id": "a6",
+   "canal": "prensa",
+   "fecha": "2026-07-24",
+   "hora": "15:30",
+   "medio": "Diario Financiero",
+   "titulo": "Caso Sartor: Fiscalía pide ampliar delitos y añade lavado de activos y fraude por omisión de OPA",
+   "resumen": "Mediante escrito al Cuarto Juzgado de Garantía de Santiago, el fiscal Araya solicitó ampliar la formalización de los 11 imputados por administración desleal y entrega de información falsa al mercado. Marca el ingreso del lavado de activos al caso financiero más relevante en tramitación.",
+   "link": "https://www.df.cl/mercados/fondos-de-inversion/caso-sartor-fiscalia-pide-ampliar-delitos-para-formalizacion-y-anade",
+   "fenomeno": "sartor",
+   "fenomeno_label": "Caso Sartor AGF",
+   "naturaleza": "judicial",
+   "naturaleza_label": "Judicial",
+   "precedentes": [
+    "economicos"
+   ],
+   "precedentes_label": [
+    "Delitos económicos"
+   ],
+   "uaf": false,
+   "nucleo": true,
+   "plataforma": null,
+   "interacciones": 0
+  }
+ ],
+ "social": [],
+ "nuevos": 0,
+ "consultas": 13
+};
+
+const NAT_COLOR = {policial:'#B3261E',judicial:'#1F5673',politico:'#7A4E9E',
+  normativo:'#2D6A4F',crimen_org:'#8C1F3D',investigacion:'#8A5A00',
+  institucional:'#3C6E8F',analisis:'#5B4B8A'};
+const DOW=['dom','lun','mar','mié','jue','vie','sáb'];
+const MON=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+const pD=iso=>{const[y,m,d]=iso.split('-').map(Number);return new Date(y,m-1,d);};
+const fS=iso=>{const d=pD(iso);return DOW[d.getDay()]+' '+d.getDate();};
+const fM=iso=>{const d=pD(iso);return d.getDate()+' '+MON[d.getMonth()];};
+const fL=iso=>{const d=pD(iso);return d.getDate()+' '+MON[d.getMonth()]+' '+d.getFullYear();};
+const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+let D=SEMILLA, state={q:'',day:'',phenom:'',prec:'',nature:'',media:'',uaf:''};
+let autoMin=5, timer=null, ultima=null, idsPrev=new Set();
+
+/* ── vigilancia ── */
+function marca(cls,txt){document.getElementById('dot').className='dot'+(cls?' '+cls:'');document.getElementById('watchState').innerHTML=txt;}
+function sello(){
+  let t='Corte: '+D.generado_legible;
+  if(ultima){const m=Math.round((Date.now()-ultima)/60000);t+=' · comprobado hace '+(m<1?'menos de 1 min':m+' min');}
+  document.getElementById('watchStamp').textContent=t;
+}
+async function comprobar(silencioso){
+  if(!silencioso) marca('','<b>Comprobando…</b>');
+  try{
+    const r=await fetch('datos.json?t='+Date.now(),{cache:'no-store'});
+    if(!r.ok) throw new Error(r.status);
+    const nuevo=await r.json();
+    ultima=Date.now();
+    const ids=new Set(nuevo.prensa.concat(nuevo.social||[]).map(x=>x.id));
+    const frescos=[...ids].filter(id=>idsPrev.size&&!idsPrev.has(id));
+    D=nuevo;
+    D.prensa.concat(D.social||[]).forEach(x=>{x.fresco=frescos.includes(x.id);});
+    idsPrev=ids;
+    pintar(); marca('','<b>Vigilancia activa</b>');
+    if(frescos.length){
+      const p=document.getElementById('newPill');
+      p.hidden=false; p.textContent=frescos.length+(frescos.length===1?' registro nuevo':' registros nuevos');
+      if(document.title.indexOf('●')<0) document.title='● '+document.title;
+    }
+  }catch(e){
+    ultima=Date.now(); marca('err','<b>Sin conexión al motor</b>');
+    document.getElementById('watchStamp').textContent='Mostrando el corte del '+D.generado_legible+' — ejecuta monitor_uaf.py y sirve la carpeta';
+    return;
+  }
+  sello();
+}
+function auto(){if(timer)clearInterval(timer);if(autoMin>0)timer=setInterval(()=>comprobar(true),autoMin*60000);
+  document.getElementById('btnAuto').textContent=autoMin>0?'Auto: '+autoMin+' min':'Auto: apagado';}
+
+/* ── filtro ── */
+function vis(){
+  return D.prensa.filter(r=>{
+    if(state.day&&r.fecha!==state.day)return false;
+    if(state.phenom&&r.fenomeno!==state.phenom)return false;
+    if(state.prec&&!(r.precedentes||[]).includes(state.prec))return false;
+    if(state.nature&&r.naturaleza!==state.nature)return false;
+    if(state.media&&r.medio!==state.media)return false;
+    if(state.uaf==='si'&&!r.uaf)return false;
+    if(state.uaf==='no'&&r.uaf)return false;
+    if(state.q){
+      const h=(r.titulo+' '+r.resumen+' '+r.medio+' '+r.fenomeno_label+' '+(r.precedentes_label||[]).join(' ')).toLowerCase();
+      if(!h.includes(state.q.toLowerCase()))return false;
+    }
+    return true;
+  }).sort((a,b)=>(b.fecha+b.hora).localeCompare(a.fecha+a.hora));
+}
+
+/* ── 1 · indicador UAF ── */
+function pintarUaf(){
+  const m=D.metricas, n=m.uaf_total, hay=n>0;
+  const hits=(m.uaf_donde||[]).map(h=>
+    '<li><span class="m">'+fM(h.fecha)+' · '+esc(h.medio)+'</span>'+
+    '<a href="'+esc(h.link)+'" target="_blank" rel="noopener">'+esc(h.titulo)+'</a></li>').join('');
+
+  document.getElementById('uafbar').innerHTML =
+  '<div class="uafbar '+(hay?'presente':'ausente')+'">'+
+    '<div class="uaf-left">'+
+      '<div class="uaf-k">Registro de la UAF</div>'+
+      '<div class="uaf-v">'+(hay?n:'SIN REGISTRO')+'</div>'+
+      '<div class="uaf-sub">'+(hay
+        ? 'menci'+(n===1?'ón':'ones')+' en '+m.volumen+' registros'
+        : 'en los '+m.volumen+' registros<br>del período')+'</div>'+
+    '</div>'+
+    '<div class="uaf-right">'+
+      (hay
+        ? '<p><strong>La UAF aparece nombrada en '+n+' de '+m.volumen+' registros.</strong> '+
+          m.uaf_prensa+' en prensa'+(m.uaf_social?' y '+m.uaf_social+' en redes':'')+'.</p>'+
+          '<ul class="uaf-hits">'+hits+'</ul>'
+        : '<p><strong>Ningún registro del período nombra a la Unidad de Análisis Financiero.</strong> '+
+          'La cobertura trata el lavado de activos como tipo penal dentro de causas concretas, '+
+          'sin referir al organismo, a sus reportes ni a sus autoridades.</p>'+
+          '<p>Para inteligencia estratégica esto significa que la UAF quedó fuera del relato '+
+          'público de estas causas, aun cuando el lavado es el eje de todas ellas.</p>')+
+      '<div class="uaf-split">'+
+        '<div class="uaf-cell"><b>'+m.uaf_prensa+'</b> en prensa</div>'+
+        '<div class="uaf-cell"><b>'+m.uaf_social+'</b> en redes monitoreadas</div>'+
+        '<div class="uaf-cell"><b>'+m.social_sin_acceso+'</b> plataformas sin acceso</div>'+
+      '</div>'+
+    '</div>'+
+  '</div>';
+}
+
+/* ── 2 · métricas ── */
+function pintarMetricas(){
+  const m=D.metricas, dias=D.ventana.dias, max=Math.max(1,...Object.values(m.por_dia));
+  const spark=dias.map(d=>{
+    const n=m.por_dia[d]||0;
+    return '<i class="'+(d===D.ventana.hoy?'now':(n?'has':''))+'" style="height:'+(n?n/max*100:6)+'%" title="'+fS(d)+': '+n+'"></i>';
+  }).join('');
+  const top=(m.fenomenos&&m.fenomenos[0])?m.fenomenos[0].label:'—';
+  const topPrec=(m.precedentes||[]).filter(p=>p.clave!=='indeterminado')[0];
+
+  document.getElementById('metrics').innerHTML=`
+  <div class="metric"><span class="k">Registros detectados</span>
+    <div class="v">${m.volumen}</div><div class="spark">${spark}</div>
+    <div class="d">${m.volumen_hoy} publicado${m.volumen_hoy===1?'':'s'} hoy</div></div>
+  <div class="metric"><span class="k">Días con actividad</span>
+    <div class="v">${m.dias_con_actividad}<small> / ${m.dias_ventana}</small></div>
+    <div class="d">de la ventana observada</div></div>
+  <div class="metric"><span class="k">Casos distintos</span>
+    <div class="v">${m.casos_activos}</div>
+    <div class="d">el mayor: ${esc(top)}</div></div>
+  <div class="metric"><span class="k">Delitos precedentes</span>
+    <div class="v">${m.precedentes_distintos}</div>
+    <div class="d">${topPrec?'el mayor: '+esc(topPrec.label):'ninguno identificado'}</div></div>
+  <div class="metric"><span class="k">Medios que informaron</span>
+    <div class="v">${m.medios_unicos}</div>
+    <div class="d">fuentes distintas</div></div>`;
+}
+
+/* ── 3 · riel, casos, cronología ── */
+function pintarRiel(){
+  const rail=document.getElementById('rail');
+  rail.innerHTML=D.ventana.dias.map(day=>{
+    const p=D.prensa.filter(r=>r.fecha===day);
+    const d=pD(day), hoy=day===D.ventana.hoy, on=state.day===day;
+    let t=p.map(r=>'<div class="tick" style="background:'+(NAT_COLOR[r.naturaleza]||'#4A5875')+'" title="'+esc(r.medio)+' — '+esc(r.naturaleza_label)+'"></div>').join('');
+    if(!t) t='<div class="none">sin registros</div>';
+    return '<button class="day'+(hoy?' is-today':'')+(on?' on':'')+'" data-day="'+day+'" aria-pressed="'+on+'">'+
+      '<div class="day-label">'+DOW[d.getDay()]+(hoy?' · hoy':'')+'</div>'+
+      '<div class="day-num">'+d.getDate()+'</div><div class="ticks">'+t+'</div></button>';
+  }).join('');
+  rail.querySelectorAll('.day').forEach(b=>b.addEventListener('click',()=>{
+    state.day=state.day===b.dataset.day?'':b.dataset.day;
+    document.getElementById('fDay').value=state.day; pintar();
+  }));
+}
+
+function pintarCasos(){
+  const f=D.metricas.fenomenos||[];
+  document.getElementById('casos').innerHTML = f.length ? f.map(c=>
+    '<div class="caso"><h3>'+esc(c.label)+'</h3>'+
+    '<div class="caso-stats">'+
+      '<div class="caso-stat"><b>'+c.n+'</b> registros</div>'+
+      '<div class="caso-stat"><b>'+c.medios+'</b> medios</div>'+
+      '<div class="caso-stat"><b>'+c.dias.length+'</b> días activos</div>'+
+    '</div>'+
+    '<div class="caso-prec"><b>Delitos precedentes</b>'+
+      (c.precedentes.length
+        ? c.precedentes.map(p=>'<span class="pill">'+esc(p)+'</span>').join('')
+        : '<span class="pill none">no determinado</span>')+
+      (c.uaf ? '<span class="pill uaf">'+c.uaf+' con mención UAF</span>'
+             : '<span class="pill none">sin mención a la UAF</span>')+
+    '</div></div>').join('') : '<div class="empty">sin casos en el período</div>';
+}
+
+function pintarCrono(){
+  const dias=D.ventana.dias, filas=D.metricas.cronologia||[];
+  const cols='170px repeat('+dias.length+',1fr)';
+  let html='<div class="crono-head" style="grid-template-columns:'+cols+'">'+
+    '<div></div>'+dias.map(d=>'<div class="crono-date'+(d===D.ventana.hoy?' hoy':'')+'">'+
+      fM(d)+(d===D.ventana.hoy?' · hoy':'')+'</div>').join('')+'</div>';
+
+  html += filas.length ? filas.map(f=>
+    '<div class="crono-row" style="grid-template-columns:'+cols+'">'+
+      '<div class="crono-name" title="'+esc(f.label)+'">'+esc(f.label)+'</div>'+
+      f.celdas.map(c=>{
+        const cls = c.n===0?'':(c.n===1?'n1':(c.n===2?'n2':'n3'));
+        const tip = c.n ? c.n+' registro'+(c.n===1?'':'s')+' · '+c.medios.join(', ') : 'sin registros';
+        return '<div class="crono-cell '+cls+'" title="'+esc(fM(c.dia)+' — '+tip)+'">'+
+          (c.n?'<span class="num">'+c.n+'</span><span class="med">'+c.medios.length+' medio'+(c.medios.length===1?'':'s')+'</span>':'')+
+        '</div>';
+      }).join('')+
+    '</div>').join('') : '<div class="empty">sin casos en el período</div>';
+
+  html += '<div class="crono-legend">'+
+    '<span><i style="background:#F2F5F9"></i>sin actividad</span>'+
+    '<span><i style="background:#D4E2F0;border-color:#B3CBE3"></i>1 registro</span>'+
+    '<span><i style="background:#9DBEDC;border-color:#7FA6CB"></i>2 registros</span>'+
+    '<span><i style="background:#5D8CBA;border-color:#4A7BA7"></i>3 o más</span></div>';
+  document.getElementById('crono').innerHTML=html;
+}
+
+function bars(el,rows){
+  const max=Math.max(1,...rows.map(r=>r.n));
+  el.innerHTML=rows.length?rows.map(r=>
+    '<div class="bar-row"><div class="bar-label"><span class="sw" style="background:'+r.color+'"></span><span title="'+esc(r.label)+'">'+esc(r.label)+'</span></div>'+
+    '<div class="bar-val">'+r.n+'</div><div class="bar-track"><div class="bar-fill" style="width:'+(r.n/max*100)+'%;background:'+r.color+'"></div></div></div>').join('')
+    :'<div class="empty">sin datos con este filtro</div>';
+}
+
+function pintarGraficos(rows){
+  const prec={};
+  rows.forEach(r=>(r.precedentes_label||[]).forEach((p,i)=>{
+    const k=p; prec[k]=prec[k]||{n:0,clave:(r.precedentes||[])[i]}; prec[k].n++;
+  }));
+  bars(document.getElementById('chartPrec'),
+    Object.keys(prec).map(k=>({label:k,n:prec[k].n,
+      color:prec[k].clave==='indeterminado'?'#B6BECD':'#8A5A00'})).sort((a,b)=>b.n-a.n));
+
+  const nat={};
+  rows.forEach(r=>{nat[r.naturaleza]=nat[r.naturaleza]||{n:0,label:r.naturaleza_label};nat[r.naturaleza].n++;});
+  bars(document.getElementById('chartNat'),
+    Object.keys(nat).map(k=>({label:nat[k].label,n:nat[k].n,color:NAT_COLOR[k]||'#4A5875'})).sort((a,b)=>b.n-a.n));
+
+  const med={}; rows.forEach(r=>med[r.medio]=(med[r.medio]||0)+1);
+  bars(document.getElementById('chartMedia'),
+    Object.keys(med).map(k=>({label:k,n:med[k],color:'#4A5875'})).sort((a,b)=>b.n-a.n||a.label.localeCompare(b.label)));
+}
+
+/* ── 4 · redes sociales ── */
+function pintarRedes(){
+  const m=D.metricas, plats=m.plataformas||[];
+  document.getElementById('socStamp').textContent =
+    m.social_monitoreadas+' monitoreadas · '+m.social_sin_acceso+' sin acceso';
+
+  document.getElementById('plataformas').innerHTML = plats.map(p=>{
+    const mon = p.estado==='monitoreado';
+    let valor, estado;
+    if(mon){
+      valor = '<div class="plat-v'+(p.menciones===0?' cero':'')+'">'+p.menciones+'</div>';
+      estado = p.menciones===0
+        ? 'sin figuración en el período'
+        : 'menciones · '+(p.menciones_uaf||0)+' nombran a la UAF';
+    }else{
+      valor = '<div class="plat-v nd">sin dato</div>';
+      estado = 'no se pudo consultar';
+    }
+    return '<div class="plat'+(mon?'':' sinacceso')+'">'+
+      '<div class="plat-top"><span class="plat-name">'+esc(p.nombre)+'</span>'+
+      '<span class="plat-badge '+(mon?'mon':'sin')+'">'+(mon?'monitoreada':'sin acceso')+'</span></div>'+
+      valor+'<div class="plat-state">'+estado+'</div>'+
+      '<div class="plat-note">'+esc(p.nota)+'</div></div>';
+  }).join('');
+
+  const mon = plats.filter(p=>p.estado==='monitoreado');
+  const conMenciones = mon.filter(p=>p.menciones>0);
+  const sinAcceso = plats.filter(p=>p.estado!=='monitoreado').map(p=>p.nombre);
+
+  document.getElementById('socVerdict').innerHTML =
+    '<div class="social-verdict">'+
+    (conMenciones.length
+      ? '<p><b>La UAF registra figuración en '+conMenciones.map(p=>p.nombre).join(' y ')+'.</b> '+
+        'El detalle de publicaciones va más abajo.</p>'
+      : '<p><b>Sin figuración de la UAF en las plataformas monitoreadas durante el período.</b> '+
+        'Se consultó '+mon.map(p=>p.nombre).join(' y ')+' con las mismas consultas que alimentan '+
+        'el monitoreo de prensa, y no arrojaron publicaciones.</p>')+
+    '<p><b>Punto ciego:</b> '+sinAcceso.join(', ')+' no se pueden consultar. '+
+    'X cerró su búsqueda pública en 2023, CrowdTangle de Meta cerró en agosto de 2024, y '+
+    'ni Instagram ni TikTok permiten búsqueda por palabra clave sin acreditación. '+
+    '<b>La ausencia de datos en esas plataformas no equivale a ausencia de figuración</b> — '+
+    'es simplemente una zona que este monitor no alcanza. LinkedIn es el punto ciego más '+
+    'relevante para este dominio: ahí circula el debate de cumplimiento.</p></div>';
+
+  const posts=(D.social||[]);
+  document.getElementById('socPosts').innerHTML = posts.length
+    ? '<div class="social-posts">'+posts.map(s=>
+        '<div class="post"><div class="post-meta"><b>'+fM(s.fecha)+'</b>'+esc(s.hora)+'<br>'+
+        esc(s.medio)+(s.interacciones?'<br>'+s.interacciones+' interac.':'')+'</div>'+
+        '<div><p>'+esc(s.titulo)+'</p>'+
+        (s.link?'<div class="rec-foot"><a href="'+esc(s.link)+'" target="_blank" rel="noopener">Ver publicación</a></div>':'')+
+        '</div></div>').join('')+'</div>'
+    : '';
+}
+
+/* ── 5 · registros ── */
+function pintarRegistros(rows){
+  const el=document.getElementById('records');
+  document.getElementById('count').textContent=rows.length+(rows.length===1?' registro':' registros');
+  if(!rows.length){el.innerHTML='<div class="empty">Ningún registro coincide. Prueba con «Limpiar».</div>';return;}
+  el.innerHTML=rows.map(r=>
+    '<article class="rec'+(r.fresco?' fresh':'')+'">'+
+      '<div class="rec-meta"><span class="rec-date">'+fS(r.fecha)+'</span>'+esc(r.hora)+
+      '<br><span class="tag" style="background:'+(NAT_COLOR[r.naturaleza]||'#4A5875')+'">'+esc(r.naturaleza_label)+'</span></div>'+
+      '<div><h3>'+esc(r.titulo)+'</h3>'+(r.resumen?'<p>'+esc(r.resumen)+'</p>':'')+
+      '<div class="rec-foot">'+
+        '<strong style="font-weight:600;color:#12203A">'+esc(r.medio)+'</strong>'+
+        '<span class="chip">'+esc(r.fenomeno_label)+'</span>'+
+        (r.precedentes_label||[]).map(p=>'<span class="chip prec">'+esc(p)+'</span>').join('')+
+        (r.uaf?'<span class="chip uaf">menciona UAF</span>':'')+
+        (r.fresco?'<span class="chip new">nuevo</span>':'')+
+        '<a href="'+esc(r.link)+'" target="_blank" rel="noopener">Abrir fuente</a>'+
+      '</div></div></article>').join('');
+}
+
+function selects(){
+  const set=(id,vals,cur)=>{
+    const s=document.getElementById(id), first=s.options[0];
+    s.innerHTML=''; s.appendChild(first);
+    vals.forEach(v=>{const o=document.createElement('option');o.value=v.v;o.textContent=v.t;s.appendChild(o);});
+    s.value=cur||'';
+  };
+  set('fDay',D.ventana.dias.slice().reverse().map(d=>({v:d,t:fL(d)+(d===D.ventana.hoy?' (hoy)':'')})),state.day);
+  const uf={},un={},up={};
+  D.prensa.forEach(r=>{
+    uf[r.fenomeno]=r.fenomeno_label; un[r.naturaleza]=r.naturaleza_label;
+    (r.precedentes||[]).forEach((p,i)=>up[p]=(r.precedentes_label||[])[i]||p);
+  });
+  set('fPhenom',Object.keys(uf).map(k=>({v:k,t:uf[k]})),state.phenom);
+  set('fPrec',Object.keys(up).map(k=>({v:k,t:up[k]})),state.prec);
+  set('fNature',Object.keys(un).map(k=>({v:k,t:un[k]})),state.nature);
+  set('fMedia',[...new Set(D.prensa.map(r=>r.medio))].sort().map(m=>({v:m,t:m})),state.media);
+}
+
+function pintar(){
+  const rows=vis();
+  document.getElementById('clock').innerHTML=
+    '<b>'+fL(D.ventana.hoy)+'</b><br>Ventana: '+fM(D.ventana.dias[0])+' → '+fM(D.ventana.hoy)+' · '+D.ventana.largo+' días<br>'+
+    D.consultas+' consultas vigiladas';
+  document.getElementById('foot').innerHTML=
+    'Motor: monitor_uaf.py · '+D.consultas+' consultas sobre Google News, Reddit y Bluesky · corte '+D.generado_legible+'<br>'+
+    'Clasificación automática por palabras clave: revisa los casos límite antes de citar.<br>'+
+    'Las formalizaciones y medidas cautelares citadas no constituyen declaración de culpabilidad.';
+  pintarUaf(); pintarMetricas(); pintarRiel(); pintarCasos(); pintarCrono();
+  pintarGraficos(rows); pintarRedes(); pintarRegistros(rows); selects(); sello();
+}
+
+document.getElementById('q').addEventListener('input',e=>{state.q=e.target.value;pintar();});
+[['fDay','day'],['fPhenom','phenom'],['fPrec','prec'],['fNature','nature'],['fMedia','media'],['fUaf','uaf']]
+  .forEach(([id,k])=>document.getElementById(id).addEventListener('change',e=>{state[k]=e.target.value;pintar();}));
+document.getElementById('btnReset').addEventListener('click',()=>{
+  state={q:'',day:'',phenom:'',prec:'',nature:'',media:'',uaf:''};
+  document.getElementById('q').value='';
+  ['fDay','fPhenom','fPrec','fNature','fMedia','fUaf'].forEach(id=>document.getElementById(id).value='');
+  pintar();
+});
+document.getElementById('btnCheck').addEventListener('click',()=>comprobar(false));
+document.getElementById('btnAuto').addEventListener('click',()=>{
+  autoMin=autoMin===5?15:(autoMin===15?0:5); auto();
+});
+document.getElementById('newPill').addEventListener('click',e=>{
+  e.target.hidden=true; document.title=document.title.replace('● ','');
+  state={q:'',day:'',phenom:'',prec:'',nature:'',media:'',uaf:''};
+  ['fDay','fPhenom','fPrec','fNature','fMedia','fUaf'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('q').value=''; pintar();
+  const f=document.querySelector('.rec.fresh'); if(f) f.scrollIntoView({behavior:'smooth',block:'center'});
+});
+
+idsPrev=new Set(D.prensa.concat(D.social||[]).map(x=>x.id));
+pintar(); auto(); comprobar(true);
+</script>
+</body>
+</html>
