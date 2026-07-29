@@ -1,0 +1,99 @@
+name: Actualizar y publicar monitor
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "index.html"
+      - "monitor_uaf.py"
+      - "construye_sitio.py"
+      - ".github/workflows/actualizar-monitor.yml"
+  schedule:
+    # 4 veces por hora, evitando el minuto 00, que suele tener mayor congestión.
+    - cron: "7,22,37,52 * * * *"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: monitor-uaf-pages
+  cancel-in-progress: false
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Recuperar estado anterior
+        shell: bash
+        run: |
+          git fetch origin monitor-state:refs/remotes/origin/monitor-state || true
+          if git show origin/monitor-state:datos.json > /tmp/datos-previos.json 2>/dev/null; then
+            mv /tmp/datos-previos.json datos.json
+          fi
+          if git show origin/monitor-state:.monitor_estado.json > /tmp/estado-previo.json 2>/dev/null; then
+            mv /tmp/estado-previo.json .monitor_estado.json
+          fi
+
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Ejecutar monitor
+        env:
+          MONITOR_CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
+          MONITOR_SMTP_SERVIDOR: ${{ secrets.MONITOR_SMTP_SERVIDOR }}
+          MONITOR_SMTP_PUERTO: ${{ secrets.MONITOR_SMTP_PUERTO }}
+          MONITOR_SMTP_SEGURIDAD: ${{ secrets.MONITOR_SMTP_SEGURIDAD }}
+          MONITOR_SMTP_USUARIO: ${{ secrets.MONITOR_SMTP_USUARIO }}
+          MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
+          MONITOR_DESTINATARIOS: ${{ secrets.MONITOR_DESTINATARIOS }}
+          MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
+          MONITOR_MINIMO_AVISO: ${{ secrets.MONITOR_MINIMO_AVISO }}
+          MONITOR_SILENCIO_MINUTOS: ${{ secrets.MONITOR_SILENCIO_MINUTOS }}
+          MONITOR_SOLO_UAF: ${{ secrets.MONITOR_SOLO_UAF }}
+        run: python monitor_uaf.py
+
+      - name: Construir sitio estático
+        run: python construye_sitio.py
+
+      - name: Configurar GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Subir sitio
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+
+      - name: Guardar estado sin aumentar el historial principal
+        shell: bash
+        run: |
+          cp datos.json /tmp/datos.json
+          cp .monitor_estado.json /tmp/.monitor_estado.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git reset --hard
+          git clean -fdx
+          git switch --orphan monitor-state-temp
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/datos.json datos.json
+          cp /tmp/.monitor_estado.json .monitor_estado.json
+          git add -f datos.json .monitor_estado.json
+          git commit -m "Actualizar datos del monitor"
+          git push --force origin HEAD:monitor-state
+
+      - name: Publicar en GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
