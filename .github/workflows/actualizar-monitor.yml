@@ -1,58 +1,65 @@
 name: Actualizar y publicar monitor
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "index.html"
-      - "monitor_uaf.py"
-      - "construye_sitio.py"
-      - ".github/workflows/actualizar-monitor.yml"
   schedule:
-    # 4 veces por hora, evitando el minuto 00, que suele tener mayor congestión.
-    - cron: "7,22,37,52 * * * *"
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      reiniciar_estado:
+        description: "Ignorar el histórico guardado y partir de cero"
+        type: boolean
+        default: false
 
+# Permisos mínimos por trabajo (principio de menor privilegio).
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
+# Una sola corrida a la vez: evita que dos actualizaciones se pisen el estado.
 concurrency:
-  group: monitor-uaf-pages
+  group: monitor-uaf
   cancel-in-progress: false
 
 jobs:
   actualizar:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
+    timeout-minutes: 22
+    permissions:
+      contents: write   # solo para escribir la rama monitor-state
     steps:
-      - name: Descargar repositorio
-        uses: actions/checkout@v6
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: Recuperar estado anterior
-        shell: bash
-        run: |
-          git fetch origin monitor-state:refs/remotes/origin/monitor-state || true
-          if git show origin/monitor-state:datos.json > /tmp/datos-previos.json 2>/dev/null; then
-            mv /tmp/datos-previos.json datos.json
-          fi
-          if git show origin/monitor-state:.monitor_estado.json > /tmp/estado-previo.json 2>/dev/null; then
-            mv /tmp/estado-previo.json .monitor_estado.json
-          fi
+          persist-credentials: false
 
       - name: Preparar Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
+
+      - name: Restaurar histórico desde la rama monitor-state
+        if: ${{ inputs.reiniciar_estado != true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if git clone --quiet --depth 1 --branch monitor-state \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" estado_previo; then
+            [ -f estado_previo/datos.json ] && cp estado_previo/datos.json datos.json || true
+            [ -f estado_previo/.monitor_estado.json ] && cp estado_previo/.monitor_estado.json .monitor_estado.json || true
+            echo "Histórico restaurado."
+          else
+            echo "Sin rama monitor-state todavía: primera corrida."
+          fi
+          rm -rf estado_previo
 
       - name: Ejecutar monitor
         env:
+          # Presupuesto de tiempo interno, inferior al timeout del job.
+          MONITOR_PRESUPUESTO_SEG: "780"
+          MONITOR_HILOS: "6"
+          MONITOR_BARRIDO: "70"
+          MONITOR_RESPETA_ROBOTS: "true"
+          # Correo (configúralos en Settings → Secrets and variables → Actions)
           MONITOR_CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
           MONITOR_SMTP_SERVIDOR: ${{ secrets.MONITOR_SMTP_SERVIDOR }}
           MONITOR_SMTP_PUERTO: ${{ secrets.MONITOR_SMTP_PUERTO }}
@@ -64,36 +71,49 @@ jobs:
           MONITOR_MINIMO_AVISO: ${{ secrets.MONITOR_MINIMO_AVISO }}
           MONITOR_SILENCIO_MINUTOS: ${{ secrets.MONITOR_SILENCIO_MINUTOS }}
           MONITOR_SOLO_UAF: ${{ secrets.MONITOR_SOLO_UAF }}
-        run: python monitor_uaf.py
+        run: python3 monitor_uaf.py
 
       - name: Construir sitio estático
-        run: python construye_sitio.py
+        run: python3 construye_sitio.py
 
-      - name: Configurar GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Subir sitio
-        uses: actions/upload-pages-artifact@v4
+      - name: Subir artefacto de Pages
+        uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
-      - name: Guardar estado sin aumentar el historial principal
-        shell: bash
+      - name: Guardar histórico en la rama monitor-state
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp datos.json /tmp/datos.json
-          cp .monitor_estado.json /tmp/.monitor_estado.json
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git reset --hard
-          git clean -fdx
-          git switch --orphan monitor-state-temp
-          git rm -rf . >/dev/null 2>&1 || true
-          cp /tmp/datos.json datos.json
-          cp /tmp/.monitor_estado.json .monitor_estado.json
-          git add -f datos.json .monitor_estado.json
-          git commit -m "Actualizar datos del monitor"
-          git push --force origin HEAD:monitor-state
+          set -euo pipefail
+          [ -f datos.json ] || exit 0
+          rm -rf estado_nuevo
+          mkdir estado_nuevo
+          cp datos.json estado_nuevo/
+          [ -f .monitor_estado.json ] && cp .monitor_estado.json estado_nuevo/ || true
+          cd estado_nuevo
+          git init --quiet
+          git checkout --quiet -b monitor-state
+          git config user.name "monitor-uaf[bot]"
+          git config user.email "monitor-uaf@users.noreply.github.com"
+          git add -A
+          git commit --quiet -m "Estado del monitor $(date -u +%Y-%m-%dT%H:%M:%SZ)" || exit 0
+          # Rama de un solo commit: el repositorio no crece con 96 corridas al día.
+          git push --quiet --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" monitor-state
 
+  publicar:
+    needs: actualizar
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
       - name: Publicar en GitHub Pages
-        id: deployment
+        id: deploy
         uses: actions/deploy-pages@v4
