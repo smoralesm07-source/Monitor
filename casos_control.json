@@ -1,0 +1,35 @@
+{
+  "descripcion": "URLs reales de regresión. Se ejecutan manualmente con --probar-casos-control porque dependen de disponibilidad de red y cambios de los medios.",
+  "casos": [
+    {
+      "nombre": "DF · Más allá de la UAF",
+      "url": "https://www.df.cl/opinion/columnistas/mas-alla-de-la-uaf-conocer-la-ruta-del-dinero-es-tarea-de-todos",
+      "espera_uaf": true
+    },
+    {
+      "nombre": "BioBioChile · Del robo al lavado de dinero",
+      "url": "https://www.biobiochile.cl/noticias/economia/actualidad-economica/2026/07/03/del-robo-al-lavado-de-dinero-asi-funciona-el-circulo-vicioso-de-las-economias-ilicitas-en-chile.shtml",
+      "espera_uaf": true
+    },
+    {
+      "nombre": "La Tercera · Transferencias para evitar alertas UAF",
+      "url": "https://www.latercera.com/nacional/noticia/la-falsa-alerta-de-fraude-y-la-supuesta-amenaza-del-tren-de-aragua-que-termino-con-ocho-imputados-por-robar-370-millones-a-notario/",
+      "espera_uaf": true
+    },
+    {
+      "nombre": "Aduanas · Contrabando de monedas",
+      "url": "https://www.aduana.cl/singular-caso-de-contrabando-intentaron-exportar-1-039-785-de-monedas/aduana/2026-07-06/141023.html",
+      "espera_uaf": true
+    },
+    {
+      "nombre": "T13 · Compliance preventivo",
+      "url": "https://www.t13.cl/noticia/tendencias/compliance-preventivo-por-las-empresas-tambien-deben-vigilar-riesgos-organizaciones",
+      "espera_uaf": true
+    },
+    {
+      "nombre": "UAF · Participación en GAFILAT",
+      "url": "https://www.uaf.cl/es-cl/noticia-detalle?id=48825",
+      "espera_uaf": true
+    }
+  ]
+}

@@ -1,39 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""Monitor UAF Chile · motor v7.0 con doble ciclo de búsqueda.
+
+Modos:
+  rapido         Monitoreo oportuno para ejecutar cada 15 minutos.
+  conciliacion   Barrido histórico profundo de los últimos 30 días.
+
+El script usa solo la biblioteca estándar de Python. Descubre URLs mediante
+buscadores de noticias, feeds, sitemaps, portadas y secciones institucionales;
+descarga los artículos; valida menciones de la UAF de Chile; conserva contexto
+LA/FT; y genera ``datos.json`` compatible con el dashboard anterior.
+
+Comandos principales:
+  python monitor_uaf.py --modo rapido
+  python monitor_uaf.py --modo conciliacion
+  python monitor_uaf.py --validar-fuentes
+  python monitor_uaf.py --probar-url URL
+  python monitor_uaf.py --probar-deteccion "texto"
+  python monitor_uaf.py --diagnostico
 """
-monitor_uaf.py — Monitor UAF Chile · motor de vigilancia de fuentes.
 
-v5.0 «cobertura-total-chile»
-
-Cambios principales frente a 4.0
-  1. Descubrimiento multicanal: Google News, Bing News, GDELT DOC 2.0, RSS/Atom
-     propios de cada medio (autodescubiertos), news-sitemaps declarados en
-     robots.txt y el sitio institucional de la UAF.
-  2. Detección UAF por proximidad: la decisión ya no se veta porque en el
-     artículo aparezca la palabra «Perú» o «Panamá» en otro párrafo. Se analiza
-     la ventana de texto alrededor de cada mención.
-  3. Barrido profundo rotativo: cada corrida lee el cuerpo completo de un lote
-     de artículos recientes aún no procesados, con memoria persistente, de modo
-     que en el transcurso del día se revisa prácticamente toda la producción de
-     los medios prioritarios.
-  4. Red endurecida: sin SSRF (bloquea redirecciones a rangos privados), límite
-     de bytes, XML sin DTD/entidades, solo http/https, respeto de robots.txt.
-  5. Paralelismo con límite por dominio, caché de cuerpos y presupuesto global
-     de tiempo para no exceder la ventana del GitHub Action.
-  6. Corrección del error que impedía enviar correo (contexto SSL inexistente).
-
-Solo biblioteca estándar. Requiere Python 3.9+ (recomendado 3.11+).
-
-  python3 monitor_uaf.py                    # una pasada
-  python3 monitor_uaf.py --daemon           # vigila cada 15 min
-  python3 monitor_uaf.py --probar-correo    # prueba SMTP
-  python3 monitor_uaf.py --diagnostico      # descubre fuentes y sale
-  python3 monitor_uaf.py --probar-deteccion "texto..."
-"""
+from __future__ import annotations
 
 import argparse
-import base64
 import copy
+import email.utils
 import gzip
 import hashlib
 import html as html_mod
@@ -54,35 +45,37 @@ import urllib.request
 import urllib.robotparser
 import xml.etree.ElementTree as ET
 import zlib
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from functools import lru_cache
 from html.parser import HTMLParser
+from pathlib import Path
+from typing import Any, Iterable
 
 try:
     from zoneinfo import ZoneInfo
-except ImportError:  # respaldo con desfase fijo
+except ImportError:  # pragma: no cover
     ZoneInfo = None
 
-# ─────────────────────────────────────────────────────────────
-# Rutas y parámetros
-# ─────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Rutas y configuración
+# ---------------------------------------------------------------------------
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-SALIDA = os.path.join(BASE, "datos.json")
-ESTADO = os.path.join(BASE, ".monitor_estado.json")
-BITACORA = os.path.join(BASE, "monitor.log")
-CONFIG = os.path.join(BASE, "config.json")
-FUENTES_EXTRA = os.path.join(BASE, "fuentes_extra.json")
+BASE = Path(__file__).resolve().parent
+SALIDA = BASE / "datos.json"
+ESTADO = BASE / ".monitor_estado.json"
+BITACORA = BASE / "monitor.log"
+CONFIG = BASE / "config.json"
+FUENTES_ARCHIVO = BASE / "fuentes_uaf.json"
+CASOS_CONTROL_ARCHIVO = BASE / "casos_control.json"
 
-VERSION_MONITOR = "5.1-cobertura-por-medio"
-ESQUEMA_ID = 2  # cambia si cambia la forma de calcular el id de una noticia
-
+VERSION_MONITOR = "7.0-doble-motor-conciliacion"
+ESQUEMA_ESTADO = 4
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
-
-UA = "Mozilla/5.0 (compatible; MonitorUAF/5.0; +https://github.com/)"
+UA = "Mozilla/5.0 (compatible; MonitorUAF/7.0; +https://github.com/)"
 UA_ROBOTS = "MonitorUAF"
 
 CONFIG_EJEMPLO = {
@@ -92,7 +85,7 @@ CONFIG_EJEMPLO = {
         "puerto": 587,
         "seguridad": "starttls",
         "usuario": "tu.correo@gmail.com",
-        "clave": "clave-de-aplicacion-de-16-letras",
+        "clave": "clave-de-aplicacion",
         "remitente_nombre": "Monitor UAF Chile",
         "destinatarios": ["tu.correo@gmail.com"],
         "minimo_para_avisar": 1,
@@ -102,3453 +95,1979 @@ CONFIG_EJEMPLO = {
 }
 
 
-def _env_bool(nombre, defecto=False):
+def env_bool(nombre: str, defecto: bool = False) -> bool:
     valor = os.getenv(nombre)
-    if valor is None or valor.strip() == "":
+    if valor is None or not valor.strip():
         return defecto
     return valor.strip().lower() in {"1", "true", "si", "sí", "yes", "on"}
 
 
-def _env_int(nombre, defecto):
+def env_int(nombre: str, defecto: int) -> int:
     valor = os.getenv(nombre)
-    if valor is None or valor.strip() == "":
+    if valor is None or not valor.strip():
         return defecto
     try:
-        return int(valor.strip())
+        return int(valor)
     except ValueError:
         return defecto
 
 
-# Ventanas y presupuestos (ajustables por variables de entorno).
-VENTANA_DIAS = _env_int("MONITOR_VENTANA_DIAS", 30)
-TIMEOUT = _env_int("MONITOR_TIMEOUT", 20)
-PRESUPUESTO_SEGUNDOS = _env_int("MONITOR_PRESUPUESTO_SEG", 840)
-HILOS = max(1, min(16, _env_int("MONITOR_HILOS", 8)))
-MAX_BYTES_RESPUESTA = _env_int("MONITOR_MAX_BYTES", 4_000_000)
-MAX_TEXTO_ANALISIS = _env_int("MONITOR_MAX_TEXTO", 20000)
-MAX_TEXTO_GUARDADO = _env_int("MONITOR_MAX_TEXTO_GUARDADO", 4000)
-MAX_ARTICULOS_ENRIQUECER = _env_int("MONITOR_MAX_ENRIQUECER", 320)
-PRESUPUESTO_BARRIDO = _env_int("MONITOR_BARRIDO", 90)
-INTERVALO_POR_HOST = float(os.getenv("MONITOR_INTERVALO_HOST", "0.9") or 0.9)
-RESPETA_ROBOTS = _env_bool("MONITOR_RESPETA_ROBOTS", True)
-TTL_ENDPOINTS_HORAS = _env_int("MONITOR_TTL_ENDPOINTS_H", 72)
-MAX_PROCESADOS = _env_int("MONITOR_MAX_PROCESADOS", 30000)
-DIAS_PROCESADOS = _env_int("MONITOR_DIAS_PROCESADOS", 21)
+VENTANA_DIAS = env_int("MONITOR_VENTANA_DIAS", 30)
+RETENCION_PROCESADOS_DIAS = env_int("MONITOR_DIAS_PROCESADOS", 45)
+TIMEOUT = env_int("MONITOR_TIMEOUT", 22)
+MAX_BYTES = env_int("MONITOR_MAX_BYTES", 5_000_000)
+MAX_TEXTO_ANALISIS = env_int("MONITOR_MAX_TEXTO", 30_000)
+MAX_TEXTO_GUARDADO = env_int("MONITOR_MAX_TEXTO_GUARDADO", 7_000)
+HILOS = max(1, min(12, env_int("MONITOR_HILOS", 8)))
+RESPETA_ROBOTS = env_bool("MONITOR_RESPETA_ROBOTS", True)
+INTERVALO_HOST = float(os.getenv("MONITOR_INTERVALO_HOST", "0.75") or 0.75)
+PRESUPUESTO_SEGUNDOS = env_int("MONITOR_PRESUPUESTO_SEG", 780)
+MAX_ENRIQUECER = env_int("MONITOR_MAX_ENRIQUECER", 280)
+MAX_CANDIDATOS = env_int("MONITOR_MAX_CANDIDATOS", 3_000)
+MAX_SITE_QUERIES = env_int("MONITOR_MAX_SITE_QUERIES", 80)
+MAX_GOOGLE_RESOLVER_RAPIDO = env_int("MONITOR_MAX_GOOGLE_RESOLVER", 120)
+MAX_GOOGLE_RESOLVER_CONCILIACION = env_int("MONITOR_MAX_GOOGLE_RESOLVER_CONCILIACION", 420)
+MAX_SITEMAPS_POR_FUENTE = env_int("MONITOR_MAX_SITEMAPS_FUENTE", 10)
+MAX_URLS_SITEMAP = env_int("MONITOR_MAX_URLS_SITEMAP", 450)
+MIN_POR_FUENTE = env_int("MONITOR_BARRIDO_MIN_FUENTE", 2)
+MODO_ENV = os.getenv("MONITOR_MODO", "rapido").strip().lower()
 
-_INICIO = time.monotonic()
+INICIO = time.monotonic()
 
 
-def tiempo_agotado(reserva=0):
-    return (time.monotonic() - _INICIO) > max(30, PRESUPUESTO_SEGUNDOS - reserva)
+def tiempo_agotado(reserva: int = 0) -> bool:
+    return time.monotonic() - INICIO >= max(30, PRESUPUESTO_SEGUNDOS - reserva)
 
 
-# ─────────────────────────────────────────────────────────────
-# Universo de fuentes chilenas
-# ─────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Catálogo de fuentes
+# ---------------------------------------------------------------------------
 
-# Nivel A: medios y fuentes verificadas. Alimentan feeds, sitemaps y barrido.
-MEDIOS_CHILE = [
-    # Prensa nacional y general
-    ("La Tercera", "latercera.com", "prensa_nacional", True),
-    ("Emol", "emol.com", "prensa_nacional", True),
-    ("El Mercurio", "elmercurio.com", "prensa_nacional", True),
-    ("La Segunda", "lasegunda.com", "prensa_nacional", False),
-    ("Las Últimas Noticias", "lun.com", "prensa_nacional", False),
-    ("La Cuarta", "lacuarta.com", "prensa_nacional", False),
-    ("Publimetro", "publimetro.cl", "prensa_nacional", True),
-    ("La Hora", "lahora.cl", "prensa_nacional", True),
-    ("La Nación", "lanacion.cl", "prensa_nacional", True),
-    # Económicos y de negocios
-    ("Diario Financiero", "df.cl", "economico", True),
-    ("Diario Financiero", "diariofinanciero.cl", "economico", True),
-    ("DF SUD", "dfsud.com", "economico", False),
-    ("Estrategia", "estrategia.cl", "economico", False),
-    ("Revista Capital", "revistacapital.cl", "economico", True),
-    ("Pulso / La Tercera", "pulso.cl", "economico", False),
-    ("Mundo Marítimo", "mundomaritimo.cl", "economico", False),
-    # Investigación y digitales
-    ("CIPER", "ciperchile.cl", "investigacion_digital", True),
-    ("El Mostrador", "elmostrador.cl", "investigacion_digital", True),
-    ("Ex-Ante", "ex-ante.cl", "investigacion_digital", True),
-    ("Interferencia", "interferencia.cl", "investigacion_digital", True),
-    ("The Clinic", "theclinic.cl", "investigacion_digital", True),
-    ("El Dínamo", "eldinamo.cl", "investigacion_digital", True),
-    ("El Dínamo", "eldynamo.cl", "investigacion_digital", False),
-    ("El Siglo", "elsiglo.cl", "investigacion_digital", False),
-    ("El Desconcierto", "eldesconcierto.cl", "investigacion_digital", True),
-    ("El Líbero", "ellibero.cl", "investigacion_digital", False),
-    ("El Ciudadano", "elciudadano.com", "investigacion_digital", False),
-    ("Diario UChile", "radio.uchile.cl", "investigacion_digital", False),
-    ("Infogate", "infogate.cl", "investigacion_digital", False),
-    ("El Periodista", "elperiodista.cl", "investigacion_digital", False),
-    # Radio y televisión
-    ("BioBioChile", "biobiochile.cl", "television_radio", True),
-    ("Cooperativa", "cooperativa.cl", "television_radio", True),
-    ("ADN Radio", "adnradio.cl", "television_radio", True),
-    ("Radio Agricultura", "radioagricultura.cl", "television_radio", False),
-    ("Radio Duna", "duna.cl", "television_radio", False),
-    ("Radio Pauta", "pauta.cl", "television_radio", True),
-    ("CNN Chile", "cnnchile.com", "television_radio", True),
-    ("24 Horas", "24horas.cl", "television_radio", True),
-    ("TVN", "tvn.cl", "television_radio", True),
-    ("T13", "t13.cl", "television_radio", True),
-    ("Canal 13", "canal13.cl", "television_radio", True),
-    ("Meganoticias", "meganoticias.cl", "television_radio", True),
-    ("Mega", "mega.cl", "television_radio", False),
-    ("CHV Noticias", "chilevision.cl", "television_radio", True),
-    ("CHV Noticias", "chvnoticias.cl", "television_radio", True),
-    # Jurídico y especializado
-    ("Diario Constitucional", "diarioconstitucional.cl", "juridico", False),
-    ("Estado Diario", "estadodiario.com", "juridico", False),
-    ("El Mercurio Legal", "legal.elmercurio.com", "juridico", False),
-    # Regionales
-    ("SoyChile", "soychile.cl", "regional", True),
-    ("Diario Concepción", "diarioconcepcion.cl", "regional", False),
-    ("El Rancagüino", "elrancaguino.cl", "regional", False),
-    ("La Discusión", "ladiscusion.cl", "regional", False),
-    ("Diario El Día", "diarioeldia.cl", "regional", False),
-    ("El Observatodo", "elobservatodo.cl", "regional", False),
-    ("El Ovallino", "elovallino.cl", "regional", False),
-    ("El Martutino", "elmartutino.cl", "regional", False),
-    ("La Prensa Austral", "laprensaaustral.cl", "regional", False),
-    ("El Pingüino", "elpinguino.com", "regional", False),
-    ("Radio Polar", "radiopolar.com", "regional", False),
-    ("El Repuertero", "elrepuertero.cl", "regional", False),
-    ("Diario de Valdivia", "diariodevaldivia.cl", "regional", False),
-    ("El Divisadero", "eldivisadero.cl", "regional", False),
-    ("El Aconcagua", "elaconcagua.cl", "regional", False),
-    ("Timeline", "timeline.cl", "regional", False),
-    # Institucionales (no cuentan como prensa en la portada)
-    ("Unidad de Análisis Financiero", "uaf.cl", "institucional", True),
-    ("Ministerio Público", "fiscaliadechile.cl", "institucional", True),
-    ("Ministerio Público", "ministeriopublico.cl", "institucional", True),
-    ("Poder Judicial", "pjud.cl", "institucional", True),
-    ("Poder Judicial", "poderjudicial.cl", "institucional", False),
-    ("CMF Chile", "cmfchile.cl", "institucional", True),
-    ("PDI", "pdichile.cl", "institucional", False),
-    ("PDI", "pdi.cl", "institucional", False),
-    ("Carabineros", "carabineros.cl", "institucional", False),
-    ("Consejo de Defensa del Estado", "cde.cl", "institucional", False),
-    ("Contraloría", "contraloria.cl", "institucional", True),
-    ("Banco Central", "bcentral.cl", "institucional", False),
-    ("SII", "sii.cl", "institucional", True),
-    ("Aduanas", "aduana.cl", "institucional", False),
-    ("Senado", "senado.cl", "institucional", False),
-    ("Cámara de Diputadas y Diputados", "camara.cl", "institucional", True),
-    ("Biblioteca del Congreso", "bcn.cl", "institucional", False),
-    ("Ministerio de Hacienda", "hacienda.cl", "institucional", False),
-    ("Diario Oficial", "diariooficial.interior.gob.cl", "institucional", True),
+def normaliza_dominio(host: str) -> str:
+    host = (host or "").strip().lower().split(":")[0].rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+FUENTES_PREDETERMINADAS: list[dict[str, Any]] = [
+    # Prensa nacional y económica
+    {"nombre": "Diario Financiero", "dominio": "df.cl", "tipo": "economico", "prioridad": 10, "secciones": ["https://www.df.cl/"], "sitemaps": ["https://www.df.cl/noticias/site/sitemap_news.xml"]},
+    {"nombre": "La Tercera / Pulso", "dominio": "latercera.com", "tipo": "prensa_nacional", "prioridad": 10, "secciones": ["https://www.latercera.com/", "https://www.latercera.com/pulso/"], "feeds": ["https://www.latercera.com/arc/outboundfeeds/rss/?outputType=xml"], "sitemaps": ["https://www.latercera.com/arc/outboundfeeds/news-sitemap-index?outputType=xml"]},
+    {"nombre": "Emol", "dominio": "emol.com", "tipo": "prensa_nacional", "prioridad": 9, "secciones": ["https://www.emol.com/"], "sitemaps": ["https://www.emol.com/sitemap/sitemapIndex.xml"]},
+    {"nombre": "El Mercurio", "dominio": "elmercurio.com", "tipo": "prensa_nacional", "prioridad": 8, "secciones": ["https://www.elmercurio.com/"]},
+    {"nombre": "El Mostrador", "dominio": "elmostrador.cl", "tipo": "investigacion_digital", "prioridad": 8, "feeds": ["https://www.elmostrador.cl/feed/"], "secciones": ["https://www.elmostrador.cl/"]},
+    {"nombre": "BioBioChile", "dominio": "biobiochile.cl", "tipo": "television_radio", "prioridad": 10, "feeds": ["https://www.biobiochile.cl/rss/rss.xml"], "sitemaps": ["https://www.biobiochile.cl/news-sitemap.xml"], "secciones": ["https://www.biobiochile.cl/"]},
+    {"nombre": "Cooperativa", "dominio": "cooperativa.cl", "tipo": "television_radio", "prioridad": 9, "feeds": ["https://www.cooperativa.cl/noticias/site/tax/port/all/rss_2_0.xml"], "secciones": ["https://www.cooperativa.cl/noticias/"]},
+    {"nombre": "ADN Radio", "dominio": "adnradio.cl", "tipo": "television_radio", "prioridad": 7, "feeds": ["https://www.adnradio.cl/rss/"], "secciones": ["https://www.adnradio.cl/"]},
+    {"nombre": "Radio Pauta", "dominio": "pauta.cl", "tipo": "television_radio", "prioridad": 7, "feeds": ["https://www.pauta.cl/feed"], "secciones": ["https://www.pauta.cl/"]},
+    {"nombre": "24 Horas", "dominio": "24horas.cl", "tipo": "television_radio", "prioridad": 8, "feeds": ["https://www.24horas.cl/rss"], "secciones": ["https://www.24horas.cl/"]},
+    {"nombre": "T13", "dominio": "t13.cl", "tipo": "television_radio", "prioridad": 8, "feeds": ["https://www.t13.cl/rss"], "secciones": ["https://www.t13.cl/"]},
+    {"nombre": "CHV Noticias", "dominio": "chvnoticias.cl", "tipo": "television_radio", "prioridad": 7, "feeds": ["https://www.chvnoticias.cl/feed/"], "secciones": ["https://www.chvnoticias.cl/"]},
+    {"nombre": "Meganoticias", "dominio": "meganoticias.cl", "tipo": "television_radio", "prioridad": 8, "feeds": ["https://www.meganoticias.cl/rss/"], "secciones": ["https://www.meganoticias.cl/"]},
+    {"nombre": "CNN Chile", "dominio": "cnnchile.com", "tipo": "television_radio", "prioridad": 8, "feeds": ["https://www.cnnchile.com/feed/"], "secciones": ["https://www.cnnchile.com/"]},
+    {"nombre": "CIPER", "dominio": "ciperchile.cl", "tipo": "investigacion_digital", "prioridad": 8, "feeds": ["https://www.ciperchile.cl/feed/"], "secciones": ["https://www.ciperchile.cl/"]},
+    {"nombre": "Ex-Ante", "dominio": "ex-ante.cl", "tipo": "investigacion_digital", "prioridad": 8, "feeds": ["https://www.ex-ante.cl/feed/"], "secciones": ["https://www.ex-ante.cl/"]},
+    {"nombre": "Interferencia", "dominio": "interferencia.cl", "tipo": "investigacion_digital", "prioridad": 7, "feeds": ["https://interferencia.cl/rss.xml"], "secciones": ["https://interferencia.cl/"]},
+    {"nombre": "El Desconcierto", "dominio": "eldesconcierto.cl", "tipo": "investigacion_digital", "prioridad": 6, "feeds": ["https://eldesconcierto.cl/feed"], "secciones": ["https://eldesconcierto.cl/"]},
+    {"nombre": "El Dínamo", "dominio": "eldinamo.cl", "tipo": "investigacion_digital", "prioridad": 6, "feeds": ["https://www.eldinamo.cl/feed/"], "secciones": ["https://www.eldinamo.cl/"]},
+    {"nombre": "Diario Constitucional", "dominio": "diarioconstitucional.cl", "tipo": "juridico", "prioridad": 8, "secciones": ["https://www.diarioconstitucional.cl/"]},
+    {"nombre": "Estado Diario", "dominio": "estadodiario.com", "tipo": "juridico", "prioridad": 5, "secciones": ["https://estadodiario.com/"]},
+    {"nombre": "Mundo Marítimo", "dominio": "mundomaritimo.cl", "tipo": "economico", "prioridad": 5, "secciones": ["https://www.mundomaritimo.cl/"]},
+    {"nombre": "Reporte Minero", "dominio": "reporteminero.cl", "tipo": "sectorial", "prioridad": 6, "secciones": ["https://www.reporteminero.cl/"]},
+    {"nombre": "Canal 9", "dominio": "canal9.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.canal9.cl/"]},
+    {"nombre": "El América", "dominio": "elamerica.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://elamerica.cl/"]},
+    {"nombre": "EnLaLinea.cl", "dominio": "enlalinea.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.enlalinea.cl/"]},
+    {"nombre": "SoyChile", "dominio": "soychile.cl", "tipo": "regional", "prioridad": 6, "feeds": ["https://www.soychile.cl/rss.aspx"], "secciones": ["https://www.soychile.cl/"]},
+    {"nombre": "Diario Concepción", "dominio": "diarioconcepcion.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.diarioconcepcion.cl/"]},
+    {"nombre": "La Discusión", "dominio": "ladiscusion.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.ladiscusion.cl/"]},
+    {"nombre": "Diario El Día", "dominio": "diarioeldia.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.diarioeldia.cl/"]},
+    {"nombre": "El Pingüino", "dominio": "elpinguino.com", "tipo": "regional", "prioridad": 5, "secciones": ["https://elpinguino.com/"]},
+    # Instituciones y servicios públicos
+    {"nombre": "Unidad de Análisis Financiero", "dominio": "uaf.cl", "tipo": "institucional", "prioridad": 10, "oficial": True, "secciones": ["https://www.uaf.cl/es-cl/noticias"]},
+    {"nombre": "Estrategia Antilavado", "dominio": "estrategiaantilavado.cl", "tipo": "institucional", "prioridad": 10, "oficial": True, "secciones": ["https://www.estrategiaantilavado.cl/es-cl/lista-noticia/"]},
+    {"nombre": "Fiscalía de Chile", "dominio": "fiscaliadechile.cl", "tipo": "institucional", "prioridad": 9, "oficial": True, "secciones": ["https://www.fiscaliadechile.cl/actualidad/noticias"]},
+    {"nombre": "Diario Oficial", "dominio": "diariooficial.interior.gob.cl", "tipo": "institucional", "prioridad": 8, "oficial": True, "secciones": ["https://www.diariooficial.interior.gob.cl/"]},
+    {"nombre": "CMF", "dominio": "cmfchile.cl", "tipo": "institucional", "prioridad": 8, "oficial": True, "secciones": ["https://www.cmfchile.cl/portal/prensa/615/w3-channel.html"]},
+    {"nombre": "Servicio de Impuestos Internos", "dominio": "sii.cl", "tipo": "institucional", "prioridad": 7, "oficial": True, "secciones": ["https://www.sii.cl/noticias/"]},
+    {"nombre": "Poder Judicial", "dominio": "pjud.cl", "tipo": "institucional", "prioridad": 7, "oficial": True, "secciones": ["https://www.pjud.cl/prensa-y-comunicaciones/noticias-del-poder-judicial"]},
+    {"nombre": "Contraloría", "dominio": "contraloria.cl", "tipo": "institucional", "prioridad": 7, "oficial": True, "secciones": ["https://www.contraloria.cl/web/cgr/noticias"]},
+    {"nombre": "Cámara de Diputadas y Diputados", "dominio": "camara.cl", "tipo": "institucional", "prioridad": 7, "oficial": True, "secciones": ["https://www.camara.cl/prensa/noticias.aspx"]},
+    {"nombre": "Senado", "dominio": "senado.cl", "tipo": "institucional", "prioridad": 7, "oficial": True, "secciones": ["https://www.senado.cl/comunicaciones/noticias"]},
+    {"nombre": "Servicio Nacional de Aduanas", "dominio": "aduana.cl", "tipo": "institucional", "prioridad": 9, "oficial": True, "secciones": ["https://www.aduana.cl/noticias/aduana/2012-04-10/131546.html"]},
+    {"nombre": "Tesorería General de la República", "dominio": "tgr.gob.cl", "tipo": "institucional", "prioridad": 8, "oficial": True, "secciones": ["https://www.tgr.gob.cl/noticias/"]},
+    {"nombre": "Superintendencia de Pensiones", "dominio": "spensiones.cl", "tipo": "institucional", "prioridad": 8, "oficial": True, "secciones": ["https://www.spensiones.cl/portal/institucional/594/w3-propertyvalue-5936.html"]},
+    {"nombre": "Superintendencia de Casinos de Juego", "dominio": "scj.gob.cl", "tipo": "institucional", "prioridad": 9, "oficial": True, "secciones": ["https://www.scj.gob.cl/noticias_scj/", "https://www.scj.gob.cl/noticias/"]},
+    {"nombre": "Consejo de Defensa del Estado", "dominio": "cde.cl", "tipo": "institucional", "prioridad": 7, "oficial": True, "secciones": ["https://www.cde.cl/prensa/"]},
+    {"nombre": "Banco Central de Chile", "dominio": "bcentral.cl", "tipo": "institucional", "prioridad": 6, "oficial": True, "secciones": ["https://www.bcentral.cl/web/banco-central/noticias-y-publicaciones"]},
+    {"nombre": "Ministerio de Hacienda", "dominio": "hacienda.cl", "tipo": "institucional", "prioridad": 7, "oficial": True, "secciones": ["https://www.hacienda.cl/noticias-y-eventos/noticias"]},
+    {"nombre": "Policía de Investigaciones", "dominio": "pdichile.cl", "tipo": "institucional", "prioridad": 7, "oficial": True, "secciones": ["https://www.pdichile.cl/centro-de-prensa"]},
+    {"nombre": "Carabineros de Chile", "dominio": "carabineros.cl", "tipo": "institucional", "prioridad": 6, "oficial": True, "secciones": ["https://www.carabineros.cl/secciones/noticias/"]},
+    {"nombre": "ANFACH", "dominio": "anfach.cl", "tipo": "gremial", "prioridad": 6, "secciones": ["https://www.anfach.cl/gremio/"]},
 ]
 
-DOMINIOS_CHILENOS = {host for _, host, _, _ in MEDIOS_CHILE}
-NOMBRE_POR_DOMINIO = {host: nombre for nombre, host, _, _ in MEDIOS_CHILE}
-TIPO_POR_DOMINIO = {host: tipo for _, host, tipo, _ in MEDIOS_CHILE}
-DOMINIOS_PRIORITARIOS = [host for _, host, tipo, prio in MEDIOS_CHILE
-                         if prio and tipo != "institucional"]
-# Todo dominio marcado como prioritario recibe consultas «site:» en los
-# buscadores: es la vía garantizada de cobertura cuando un medio no publica
-# feed ni news-sitemap utilizable.
-DOMINIOS_BUSQUEDA_SITIO = [host for _, host, _, prio in MEDIOS_CHILE if prio]
-DOMINIOS_INSTITUCIONALES = {host for _, host, tipo, _ in MEDIOS_CHILE if tipo == "institucional"}
 
-# Nivel B: cualquier dominio bajo el ccTLD chileno o subdominio de gobierno.
-SUFIJOS_CHILENOS = (".cl",)
-SUFIJOS_INSTITUCIONALES = (".gob.cl", ".gov.cl")
+def cargar_fuentes() -> list[dict[str, Any]]:
+    fuentes = copy.deepcopy(FUENTES_PREDETERMINADAS)
+    if FUENTES_ARCHIVO.exists():
+        try:
+            extra = json.loads(FUENTES_ARCHIVO.read_text(encoding="utf-8"))
+            if isinstance(extra, dict):
+                extra = extra.get("fuentes", [])
+            por_dominio = {f["dominio"]: f for f in fuentes}
+            for f in extra:
+                if not isinstance(f, dict) or not f.get("dominio"):
+                    continue
+                d = normaliza_dominio(f["dominio"])
+                mezcla = dict(por_dominio.get(d, {}))
+                mezcla.update(f)
+                mezcla["dominio"] = d
+                por_dominio[d] = mezcla
+            fuentes = list(por_dominio.values())
+        except Exception as exc:
+            print(f"! fuentes_uaf.json inválido: {exc}", file=sys.stderr)
+    for f in fuentes:
+        f["dominio"] = normaliza_dominio(f["dominio"])
+        f.setdefault("nombre", f["dominio"])
+        f.setdefault("tipo", "otro")
+        f.setdefault("prioridad", 5)
+        f.setdefault("oficial", f["tipo"] == "institucional")
+        f.setdefault("feeds", [])
+        f.setdefault("sitemaps", [])
+        f.setdefault("secciones", [f"https://{f['dominio']}/"])
+    return sorted(fuentes, key=lambda x: (-int(x.get("prioridad", 0)), x["dominio"]))
 
-# Dominios que jamás deben tratarse como prensa chilena aunque terminen en .cl
+
+FUENTES = cargar_fuentes()
+FUENTE_POR_DOMINIO = {f["dominio"]: f for f in FUENTES}
+DOMINIOS_CHILENOS = set(FUENTE_POR_DOMINIO)
+DOMINIOS_INSTITUCIONALES = {f["dominio"] for f in FUENTES if f.get("oficial")}
+DOMINIOS_MINIMOS = tuple(sorted({
+    "df.cl", "latercera.com", "emol.com", "elmercurio.com", "elmostrador.cl",
+    "biobiochile.cl", "cooperativa.cl", "adnradio.cl", "pauta.cl", "24horas.cl",
+    "t13.cl", "chvnoticias.cl", "meganoticias.cl", "cnnchile.com", "interferencia.cl",
+    "ciperchile.cl", "ex-ante.cl", "eldesconcierto.cl", "eldinamo.cl",
+    "fiscaliadechile.cl", "diariooficial.interior.gob.cl", "cmfchile.cl", "sii.cl",
+    "pjud.cl", "contraloria.cl", "camara.cl", "soychile.cl", "aduana.cl",
+    "tgr.gob.cl", "spensiones.cl", "scj.gob.cl", "estrategiaantilavado.cl",
+}))
+
 DOMINIOS_VETADOS = {
-    "news.google.com", "google.com", "bing.com", "youtube.com", "facebook.com",
-    "x.com", "twitter.com", "instagram.com", "tiktok.com", "linkedin.com",
-    "msn.com", "yahoo.com", "flipboard.com", "es.wikipedia.org",
+    "news.google.com", "google.com", "www.google.com", "bing.com", "www.bing.com",
+    "youtube.com", "facebook.com", "x.com", "twitter.com", "instagram.com",
+    "tiktok.com", "linkedin.com", "msn.com", "yahoo.com", "flipboard.com",
 }
 
-NOMBRES_MEDIOS_CHILENOS = [
-    "la tercera", "diario financiero", "df mas", "df más", "df sud", "emol",
-    "el mercurio", "biobiochile", "radio bio bio", "radio bío bío", "ciper",
-    "el mostrador", "ex-ante", "ex ante", "interferencia", "the clinic",
-    "el dinamo", "el dínamo", "pauta", "radio agricultura", "cooperativa",
-    "adn radio", "cnn chile", "24 horas", "t13", "tele13", "meganoticias",
-    "mega", "chv noticias", "chilevision", "chilevisión", "la cuarta",
-    "la segunda", "las ultimas noticias", "las últimas noticias", "soychile",
-    "publimetro", "la hora", "el libero", "el líbero", "el desconcierto",
-    "el ciudadano", "diario uchile", "radio uchile", "estrategia",
-    "revista capital", "diario concepcion", "diario concepción",
-    "el rancaguino", "el rancagüino", "la discusion", "la discusión",
-    "diario el dia", "diario el día", "el observatodo", "la prensa austral",
-    "el pinguino", "el pingüino", "diario constitucional", "estado diario",
-    "unidad de analisis financiero", "unidad de análisis financiero",
-    "fiscalia de chile", "fiscalía de chile", "ministerio publico",
-    "ministerio público", "cmf chile", "poder judicial", "senado", "camara",
-    "cámara de diputadas", "contraloria", "contraloría", "banco central",
-    "servicio de impuestos internos", "aduanas", "diario oficial",
-]
-
-# Rutas habituales de feeds y sitemaps para el autodescubrimiento.
 RUTAS_FEED = [
     "/feed", "/feed/", "/rss", "/rss/", "/rss.xml", "/feed.xml", "/index.xml",
-    "/atom.xml", "/feed/rss", "/?feed=rss2", "/rss/todos.xml",
-    "/arc/outboundfeeds/rss/?outputType=xml",
-    "/arc/outboundfeeds/rss/category/nacional/?outputType=xml",
+    "/atom.xml", "/?feed=rss2", "/arc/outboundfeeds/rss/?outputType=xml",
 ]
 RUTAS_SITEMAP = [
-    "/news-sitemap.xml", "/sitemap-news.xml", "/sitemap_news.xml",
-    "/news.xml", "/sitemap-noticias.xml",
-    "/arc/outboundfeeds/news-sitemap-index?outputType=xml",
-    "/arc/outboundfeeds/news-sitemap/?outputType=xml",
-    "/sitemap.xml", "/sitemap_index.xml", "/sitemapIndex.xml",
+    "/news-sitemap.xml", "/sitemap-news.xml", "/sitemap_news.xml", "/news.xml",
+    "/sitemap-noticias.xml", "/sitemap.xml", "/sitemap_index.xml",
 ]
 
-# Semillas conocidas: se validan igual, pero ahorran descubrimiento.
-SEMILLAS_ENDPOINTS = {
-    "latercera.com": {
-        "feeds": ["https://www.latercera.com/arc/outboundfeeds/rss/?outputType=xml"],
-        "sitemaps": ["https://www.latercera.com/arc/outboundfeeds/news-sitemap-index?outputType=xml"],
-    },
-    "df.cl": {"feeds": [], "sitemaps": ["https://www.df.cl/noticias/site/sitemap_news.xml"]},
-    "biobiochile.cl": {"feeds": ["https://www.biobiochile.cl/rss/rss.xml"],
-                       "sitemaps": ["https://www.biobiochile.cl/news-sitemap.xml"]},
-    "emol.com": {"feeds": [], "sitemaps": ["https://www.emol.com/sitemap/sitemapIndex.xml"]},
-    "elmostrador.cl": {"feeds": ["https://www.elmostrador.cl/feed/"], "sitemaps": []},
-    "ciperchile.cl": {"feeds": ["https://www.ciperchile.cl/feed/"], "sitemaps": []},
-    "ex-ante.cl": {"feeds": ["https://www.ex-ante.cl/feed/"], "sitemaps": []},
-    "interferencia.cl": {"feeds": ["https://interferencia.cl/rss.xml"], "sitemaps": []},
-    "cooperativa.cl": {"feeds": ["https://www.cooperativa.cl/noticias/site/tax/port/all/rss_2_0.xml"],
-                       "sitemaps": []},
-    "uaf.cl": {"feeds": [], "sitemaps": []},
-}
+# ---------------------------------------------------------------------------
+# Consultas y taxonomías
+# ---------------------------------------------------------------------------
 
-CONSULTAS_UAF_NUCLEO = [
-    '"Unidad de Análisis Financiero"',
-    '"Unidad de Analisis Financiero"',
-    '"UAF" "lavado de activos"',
-    '"UAF" "lavado de dinero"',
-    '"UAF" Chile "operaciones sospechosas"',
-    '"Unidad de Análisis Financiero" "Ley 19.913"',
+CONSULTAS_UAF = [
     '"Unidad de Análisis Financiero" Chile',
-    '"director de la UAF"',
-    '"reporte de operaciones sospechosas" Chile',
+    '"Unidad de Analisis Financiero" Chile',
+    '"UAF Chile"',
+    '"la UAF" "lavado de activos" Chile',
+    '"director de la UAF" Chile',
+    '"director subrogante de la UAF" Chile',
+    '"Ley 19.913" UAF',
+    '"reportado a la UAF" Chile',
+    '"informó a la UAF" Chile',
+    '"informo a la UAF" Chile',
+    '"antecedentes a la UAF" Chile',
+    '"alertas de la UAF" Chile',
+    '"remitió antecedentes a la UAF" Chile',
+    '"remitio antecedentes a la UAF" Chile',
+    '"solicitó a la UAF" Chile',
+    '"reportes a la UAF" Chile',
+    '"facultades de la UAF" Chile',
+    '"experiencia en la UAF" Chile',
+    '"reportes de operaciones sospechosas" UAF Chile',
 ]
 
-CONSULTAS_LAFT = [
+CONSULTAS_CONTEXTO = [
     '"lavado de activos" Chile',
     '"lavado de dinero" Chile',
-    'blanqueo de capitales Chile',
     '"financiamiento del terrorismo" Chile',
     '"operaciones sospechosas" Chile',
     '"cuentas puente" Chile',
     'testaferros "lavado de activos" Chile',
-    '"transferencias fraccionadas" Chile',
-    '"delitos precedentes" lavado Chile',
-    '"beneficiario final" Chile "lavado"',
-    '"debida diligencia" "lavado de activos" Chile',
-    '"Sistema de Inteligencia Económica" Chile',
-    '"Ley 21.121" Chile lavado',
-    '"Ley 21.595" delitos económicos Chile',
-    'GAFILAT Chile',
-    'GAFI Chile "lavado de activos"',
-    '"secreto bancario" "lavado de activos" Chile',
-    '"oficial de cumplimiento" Chile',
-    '"sujeto obligado" UAF Chile',
-    '(formalizados OR imputados OR condenados) "lavado de activos" Chile',
-    '"Tren de Aragua" (lavado OR fraude OR extorsión) Chile',
-    '"Operación Tokio" Chile',
-    '"caso Sartor" Chile',
-    '"crimen organizado" "ruta del dinero" Chile',
-    '(banco OR fintech OR "medios de pago") "lavado de activos" Chile',
-    '(notario OR notaría OR conservador OR inmobiliaria) lavado Chile',
-    '(casino OR automotora OR factoring OR leasing) "lavado de activos" Chile',
-    '(criptomonedas OR criptoactivos) "lavado de activos" Chile',
-    '(fondos OR corredora OR seguros OR AFP) "lavado de activos" Chile',
+    '"beneficiario final" Chile lavado',
+    'contrabando "lavado de activos" Chile',
+    'corrupción "lavado de activos" Chile',
+    'narcotráfico "lavado de activos" Chile',
+    'apuestas online lavado Chile',
 ]
 
-
-def construye_consultas_prensa():
-    consultas = list(CONSULTAS_UAF_NUCLEO) + list(CONSULTAS_LAFT)
-    for dominio in DOMINIOS_BUSQUEDA_SITIO:
-        consultas.append(f'site:{dominio} ("Unidad de Análisis Financiero" OR UAF)')
-        consultas.append(f'site:{dominio} ("lavado de activos" OR "lavado de dinero" '
-                         f'OR "operaciones sospechosas" OR blanqueo)')
-    return list(dict.fromkeys(consultas))
-
-
-CONSULTAS_PRENSA = construye_consultas_prensa()
-
-CONSULTAS_GDELT = [
-    '"unidad de analisis financiero"',
-    '"unidad de análisis financiero"',
-    '(UAF AND "lavado de activos")',
-    '"lavado de activos" AND chile',
-    '"financiamiento del terrorismo" AND chile',
+MENCION_UAF_RE = re.compile(r"\b(?:u\.?a\.?f\.?|unidad\s+de\s+an[aá]lisis\s+financiero)\b", re.I)
+SENALES_LAFT = [
+    "lavado de activos", "lavado de dinero", "blanqueo de capitales",
+    "financiamiento del terrorismo", "operaciones sospechosas", "reporte de operaciones",
+    "ros", "beneficiario final", "debida diligencia", "testaferro", "cuenta puente",
+    "ruta del dinero", "economias ilicitas", "economía ilícita", "comiso",
 ]
-
-CONSULTAS_BING = CONSULTAS_UAF_NUCLEO + [
-    '"lavado de activos" Chile UAF',
-    '"operaciones sospechosas" UAF Chile',
-    '"financiamiento del terrorismo" Chile',
-] + [f'site:{d} ("Unidad de Análisis Financiero" OR "lavado de activos")'
-     for d in DOMINIOS_PRIORITARIOS[:18]]
-
-CONSULTAS_SOCIALES = [
-    '"lavado de activos"',
-    '"Unidad de Análisis Financiero"',
-    'UAF Chile',
-    '"financiamiento del terrorismo" Chile',
+SENALES_CHILE = [
+    "chile", "chileno", "chilena", "ley 19.913", "ley n 19.913", "uaf.cl",
+    "fiscalia de chile", "ministerio publico", "pdi", "carabineros", "aduanas",
+    "cmf", "servicio de impuestos internos", "sii", "contraloria", "senado",
+    "camara de diputadas", "tesoreria general", "superintendencia de casinos",
+    "superintendencia de pensiones", "gafilat", "milaft", "santiago",
 ]
-SUBREDDITS = ["chile", "RepublicaDeChile"]
-PLATAFORMAS = [
-    {"id": "reddit", "nombre": "Reddit", "estado": "monitoreado",
-     "nota": "Consulta pública JSON; la plataforma puede limitar el acceso automatizado."},
-    {"id": "bluesky", "nombre": "Bluesky", "estado": "monitoreado",
-     "nota": "API pública de búsqueda de publicaciones, sin autenticación."},
+SENALES_EXTRANJERAS = [
+    "uaf panama", "uaf panamá", "uaf guatemala", "uaf bolivia", "uaf paraguay",
+    "uafe ecuador", "uif peru", "uif perú", "uif argentina", "uif colombia", "uif mexico",
+    "unidad de analisis financiero y economico", "unidad de informacion financiera",
+    "unidad de analisis financiero de panama", "unidad de analisis financiero del peru",
+    "superintendencia de bancos de panama", "fiscalia de panama", "fiscalía de panamá",
 ]
-
-DISPARADORES_CANDIDATO = [
-    "uaf", "unidad de analisis financiero", "lavado", "blanqueo", "activos",
-    "dinero", "fraude", "estafa", "extorsion", "secuestro", "tren de aragua",
-    "crimen organizado", "narcotrafico", "corrupcion", "cohecho", "soborno",
-    "formaliz", "imputad", "condena", "prision preventiva", "fiscalia",
-    "ministerio publico", "allanamiento", "incaut", "testaferro", "cuentas",
-    "transferencias", "banco", "bancaria", "fintech", "mercado pago", "cripto",
-    "notario", "notaria", "inmobiliaria", "automotora", "vehiculo", "fondos",
-    "corredora", "sartor", "secreto bancario", "beneficiario final",
-    "operaciones sospechosas", "sujeto obligado", "cumplimiento", "cmf",
-    "aduana", "zona franca", "casino", "apuestas", "factoring", "leasing",
-    "contrabando", "tributari", "evasion", "facturas falsas", "delito",
-    "delitos economicos", "gafilat", "gafi", "sanciones", "ofac", "pep",
+SENALES_TEMATICAS = SENALES_LAFT + [
+    "crimen organizado", "narcotrafico", "narcotráfico", "corrupcion", "corrupción",
+    "fraude", "estafa", "contrabando", "trata de personas", "delitos economicos",
+    "delitos económicos", "secreto bancario", "sujeto obligado", "casinos de juego",
 ]
-
-# ─────────────────────────────────────────────────────────────
-# Taxonomías (claves y etiquetas compatibles con el dashboard)
-# ─────────────────────────────────────────────────────────────
 
 FENOMENOS = {
-    "sartor":   ["sartor", "azul azul", "michael clark", "larraín mery", "larrain mery",
-                 "tactical sport", "antumalal"],
-    "tokio":    ["operación tokio", "operacion tokio", "pérez asencio", "perez asencio",
-                 "bexgroup", "bexdigital"],
-    "tren_aragua": ["tren de aragua"],
-    "trata":    ["trata de personas", "explotación sexual", "explotacion sexual"],
-    "narco":    ["narcotráfico", "narcotrafico", "tráfico de drogas", "trafico de drogas",
-                 "microtráfico", "microtrafico"],
-    "normativa": ["circular", "ley 19.913", "ley n°19.913", "inteligencia económica",
-                  "inteligencia economica", "secreto bancario", "21.595", "delitos económicos"],
-    "corrupcion": ["cohecho", "malversación", "malversacion", "fraude al fisco", "soborno",
-                   "probidad"],
-}
-FENOMENO_ETIQUETA = {
-    "sartor": "Caso Sartor AGF", "tokio": "Operación Tokio",
-    "tren_aragua": "Tren de Aragua", "trata": "Trata de personas",
-    "narco": "Narcotráfico", "normativa": "Marco normativo",
-    "corrupcion": "Corrupción", "otro": "Otros",
+    "contrabando": ["contrabando", "aduanas", "mercancia ilicita", "monedas de 10"],
+    "crimen_organizado": ["crimen organizado", "tren de aragua", "banda criminal"],
+    "corrupcion": ["corrupcion", "cohecho", "malversacion", "soborno"],
+    "narcotrafico": ["narcotrafico", "trafico de drogas", "droga incautada"],
+    "fraude": ["fraude", "estafa", "defraudacion"],
+    "apuestas": ["apuestas online", "apuestas en linea", "juego ilegal", "casino"],
+    "cibercrimen": ["cibercrimen", "fraude informatico", "criptomoneda", "criptoactivo"],
+    "sartor": ["sartor"],
+    "tren_de_aragua": ["tren de aragua"],
+    "trata": ["trata de personas", "explotacion sexual"],
 }
 
 NATURALEZAS = {
-    "policial":     ["detenid", "operativo", "allanamiento", "incaut", "desarticul",
-                     "pdi", "carabineros", "policia de investigaciones", "megaoperativo",
-                     "decomis", "golpe a", "captur"],
-    "judicial":     ["formaliz", "prision preventiva", "cautelar", "condena", "sentencia",
-                     "juzgado", "tribunal", "corte de apelaciones", "corte suprema",
-                     "imputad", "querella", "audiencia", "acusacion", "sobreseimiento"],
-    "politico":     ["proyecto de ley", "camara de diputados", "senado", "comision mixta",
-                     "ministro", "subsecretari", "gobierno", "oposicion", "congreso",
-                     "tramitacion", "veto", "indicacion"],
-    "normativo":    ["circular", "reglamento", "normativa", "instructivo", "cmf",
-                     "oficio circular", "entra en vigencia", "modificacion legal",
-                     "ley n", "decreto"],
-    "crimen_org":   ["organizacion criminal", "banda criminal", "asociacion ilicita",
-                     "asociacion criminal", "estructura criminal", "red criminal",
-                     "celula", "faccion", "cartel", "megabanda"],
-    "investigacion": ["reportaje", "ciper", "revela", "documentos internos", "filtr",
-                      "investigacion periodistica", "segun pudo establecer"],
-    "institucional": ["nombra", "asume", "renuncia", "presupuesto", "dotacion",
-                      "convenio", "cooperacion internacional", "gafilat", "gafi",
-                      "memorandum", "capacitacion"],
-    "analisis":     ["columna", "opinion", "analisis", "estudio", "informe de",
-                     "experto", "seminario", "entrevista", "balance"],
-}
-NATURALEZA_ETIQUETA = {
-    "policial": "Policial", "judicial": "Judicial", "politico": "Político-legislativo",
-    "normativo": "Normativo", "crimen_org": "Crimen organizado",
-    "investigacion": "Investigación periodística", "institucional": "Institucional",
-    "analisis": "Análisis y opinión",
+    "institucional": ["cuenta publica", "participacion de la uaf", "jornada", "seminario", "simposio"],
+    "legislativo": ["proyecto de ley", "senador", "diputado", "comision de", "boletin"],
+    "regulatorio": ["circular", "normativa", "regulacion", "sancion", "fiscalizacion"],
+    "judicial": ["formalizacion", "imputado", "querella", "condena", "tribunal", "fiscalia"],
+    "policial": ["detenido", "allanamiento", "incautacion", "operativo", "pdi"],
+    "opinion": ["/opinion/", "/columnista", "/editorial/", "columna", "carta al director"],
+    "analisis": ["analisis", "estudio", "informe", "radiografia", "perfil"],
 }
 
 PRECEDENTES = {
-    "narcotrafico":  ["narcotrafico", "trafico de drogas", "microtrafico", "ley 20.000",
-                      "cocaina", "ketamina", "marihuana", "droga"],
-    "economicos":    ["administracion desleal", "informacion falsa al mercado",
-                      "delitos economicos", "21.595", "estafa", "fraude",
-                      "negociacion incompatible", "uso de informacion privilegiada",
-                      "opa", "sartor", "administradora general de fondos"],
-    "corrupcion":    ["cohecho", "malversacion", "fraude al fisco", "soborno",
-                      "probidad", "trafico de influencias", "corrupcion"],
-    "trata":         ["trata de personas", "explotacion sexual", "trafico de migrantes",
-                      "proxenetismo"],
-    "tributarios":   ["delito tributario", "evasion", "facturas falsas", "sii",
-                      "elusion", "boletas falsas"],
-    "contrabando":   ["contrabando", "aduana", "internacion ilegal", "mercancia no declarada"],
-    "extorsion":     ["extorsion", "secuestro", "sicariato", "amenaza", "cobro de piso"],
-    "armas":         ["trafico de armas", "ley de armas", "arsenal", "municiones"],
-    "terrorismo":    ["financiamiento del terrorismo", "acto terrorista", "ley antiterrorista"],
-    "ciberdelito":   ["ciberdelito", "delito informatico", "phishing", "criptoactivo",
-                      "estafa digital", "billetera virtual"],
-    "ambiental":     ["delito ambiental", "tala ilegal", "pesca ilegal", "mineria ilegal"],
-    "receptacion":   ["receptacion", "robo de vehiculos", "desarme de autos"],
-}
-PRECEDENTE_ETIQUETA = {
-    "narcotrafico": "Narcotráfico", "economicos": "Delitos económicos",
-    "corrupcion": "Corrupción", "trata": "Trata y tráfico de personas",
-    "tributarios": "Delitos tributarios", "contrabando": "Contrabando y aduanero",
-    "extorsion": "Extorsión y secuestro", "armas": "Tráfico de armas",
-    "terrorismo": "Financiamiento del terrorismo", "ciberdelito": "Ciberdelito",
-    "ambiental": "Delitos ambientales", "receptacion": "Receptación",
-    "indeterminado": "No determinado",
-}
-
-ENCUADRE_NUCLEO = ["lavado de activos", "lavado de dinero", "blanqueo",
-                   "activos de origen ilicito", "ruta del dinero",
-                   "operaciones sospechosas", "operacion sospechosa"]
-
-SUJETOS_OBLIGADOS = {
-    "banca_finanzas": [
-        "banco", "bancos", "bancari", "institucion financiera", "cooperativa de ahorro",
-        "caja de compensacion", "casa de cambio", "transferencia de dinero",
-        "transporte de valores", "representacion de banco extranjero",
-    ],
-    "mercado_valores_fondos": [
-        "administradora general de fondos", "agf", "fondos mutuos", "fondo de inversion",
-        "corredora de bolsa", "corredor de bolsa", "agente de valores", "bolsa de valores",
-        "securitizacion", "deposito de valores", "mercado de futuro", "mercado de opciones",
-    ],
-    "pensiones_seguros": [
-        "afp", "administradora de fondos de pensiones", "compania de seguros",
-        "compañia de seguros", "aseguradora", "seguro de vida", "mutuo hipotecario",
-    ],
-    "fintech_pagos": [
-        "fintech", "fintec", "medio de pago", "tarjeta de credito", "tarjeta de pago",
-        "iniciacion de pagos", "plataforma de financiamiento colectivo", "crowdfunding",
-        "custodia de instrumentos financieros", "sistema alternativo de transaccion",
-        "billetera digital", "billetera virtual", "proveedor de servicios financieros",
-        "mercado pago", "tenpo", "mach", "paypal", "pasarela de pago", "criptoactivo",
-        "exchange de criptomonedas",
-    ],
-    "inmobiliario_notarial": [
-        "inmobiliaria", "gestion inmobiliaria", "corredor de propiedades",
-        "corredora de propiedades", "notario", "notaria", "conservador de bienes raices",
-        "conservador", "compraventa de inmueble", "mercado inmobiliario",
-    ],
-    "vehiculos_leasing_factoring": [
-        "automotora", "comercializadora de vehiculos", "arriendo de vehiculos",
-        "rent a car", "leasing", "arrendamiento financiero", "factoring", "factoraje",
-        "compra de vehiculos", "adquisicion de vehiculos",
-    ],
-    "casinos_deporte": [
-        "casino de juego", "casino flotante", "hipodromo", "club de tiro", "club de caza",
-        "club de pesca", "organizacion deportiva profesional", "club de futbol",
-        "sociedad anonima deportiva", "sadp", "apuestas en linea", "casas de apuestas",
-    ],
-    "aduanas_zonas_francas": [
-        "agente de aduana", "aduana", "zona franca", "usuario de zona franca",
-        "sociedad administradora de zona franca", "mercancia", "internacion",
-    ],
-    "metales_joyas_remates": [
-        "joyeria", "joyas", "piedras preciosas", "metales preciosos", "oro",
-        "casa de remate", "martillero", "remate", "subasta",
-    ],
-    "armas": [
-        "fabricacion de armas", "venta de armas", "armeria", "trafico de armas",
-        "municiones", "arsenal",
-    ],
-    "otros_obligados": [
-        "sujeto obligado", "sujetos obligados", "entidad reportante", "entidades reportantes",
-        "oficial de cumplimiento", "reporte de operaciones sospechosas", "reporte ros",
-        "reporte de operaciones en efectivo", "reporte roe",
-    ],
-}
-SUJETO_OBLIGADO_ETIQUETA = {
-    "banca_finanzas": "Banca y servicios financieros",
-    "mercado_valores_fondos": "Mercado de valores y fondos",
-    "pensiones_seguros": "Pensiones, seguros y mutuos",
-    "fintech_pagos": "Fintech y medios de pago",
-    "inmobiliario_notarial": "Inmobiliario, notarios y conservadores",
-    "vehiculos_leasing_factoring": "Vehículos, leasing y factoring",
-    "casinos_deporte": "Casinos, apuestas y deporte profesional",
-    "aduanas_zonas_francas": "Aduanas y zonas francas",
-    "metales_joyas_remates": "Metales, joyas y remates",
-    "armas": "Fabricación y venta de armas",
-    "otros_obligados": "Otros sujetos obligados",
-}
-
-IMPACTO_SUJETO = {
-    "vulneracion_la": [
-        "imputad", "formaliz", "condena", "investigacion penal", "allanamiento",
-        "incaut", "defraud", "estafa", "utilizad para lavar", "canaliz activos",
-        "operacion sospechosa", "querella", "prision preventiva",
-    ],
-    "cambio_regulatorio": [
-        "circular", "normativa", "reglamento", "ley", "entra en vigencia", "modifica",
-        "instruccion", "exigencia", "obligacion", "debida diligencia", "beneficiario final",
-        "persona expuesta politicamente", "pep", "sancion", "fiscalizacion",
-    ],
-    "gestion_cumplimiento": [
-        "oficial de cumplimiento", "programa de cumplimiento", "modelo de prevencion",
-        "reporte de operaciones sospechosas", "ros", "roe", "capacitacion", "prevencion",
-        "conocimiento del cliente", "kyc", "monitoreo transaccional",
-    ],
-    "cambio_industria": [
-        "fusion", "adquisicion", "quiebra", "insolvencia", "ciberataque", "filtracion",
-        "vulneracion", "fraude", "nueva tecnologia", "criptoactivo", "digitalizacion",
-        "riesgo operacional", "mercado", "supervision sectorial",
-    ],
-}
-IMPACTO_SUJETO_ETIQUETA = {
-    "vulneracion_la": "Vinculación o vulneración por LA/FT",
-    "cambio_regulatorio": "Cambio regulatorio o de supervisión",
-    "gestion_cumplimiento": "Gestión de cumplimiento preventivo",
-    "cambio_industria": "Cambio relevante en la industria",
+    "corrupcion": ["corrupcion", "cohecho", "malversacion", "soborno"],
+    "narcotrafico": ["narcotrafico", "trafico de drogas"],
+    "contrabando": ["contrabando"],
+    "fraude": ["fraude", "estafa", "defraudacion"],
+    "delitos_economicos": ["delitos economicos", "ley 21.595", "administracion desleal"],
+    "trata": ["trata de personas", "explotacion sexual"],
+    "tributarios": ["delito tributario", "evasión", "evasion", "facturas falsas"],
 }
 
 TOPICOS = {
-    "fiscalizacion": ["fiscaliz", "sancion", "multa", "supervision", "incumplimiento"],
-    "reportes": ["reporte de operaciones sospechosas", "reporte ros", "ros",
-                 "reporte de operaciones en efectivo", "roe", "sujeto obligado", "reportante"],
-    "normativa": ["circular", "normativa", "reglamento", "ley 19.913", "proyecto de ley",
-                  "secreto bancario", "sistema de inteligencia economica"],
-    "inteligencia": ["inteligencia financiera", "analisis financiero", "operacion sospechosa",
-                     "ruta del dinero", "trazabilidad", "informe financiero"],
-    "investigacion_penal": ["fiscalia", "formaliz", "imputad", "tribunal", "condena",
-                            "querella", "investigacion penal", "prision preventiva"],
-    "crimen_organizado": ["crimen organizado", "tren de aragua", "banda criminal",
-                          "organizacion criminal", "narcotrafico", "trata de personas"],
-    "cooperacion": ["gafi", "gafilat", "egmont", "cooperacion", "convenio", "estrategia nacional"],
-    "prevencion": ["prevencion", "lavado de activos", "financiamiento del terrorismo", "la/ft"],
-    "gestion_uaf": ["director", "cuenta publica", "presupuesto", "dotacion", "capacitacion",
-                    "unidad de analisis financiero informa", "uaf publica"],
-    "sujetos_obligados": ["sujeto obligado", "entidad reportante", "oficial de cumplimiento",
-                          "debida diligencia", "beneficiario final", "conocimiento del cliente",
-                          "reporte ros", "reporte roe", "circular 62"],
-    "vulneracion_sectorial": ["banco", "fintech", "inmobiliaria", "notario", "casino",
-                              "automotora", "factoring", "leasing", "corredora de bolsa",
-                              "aseguradora", "zona franca", "joyeria"],
-}
-TOPICO_ETIQUETA = {
-    "fiscalizacion": "Fiscalización y sanciones",
-    "reportes": "Reportes y sujetos obligados",
-    "normativa": "Normativa y regulación",
-    "inteligencia": "Inteligencia financiera",
-    "investigacion_penal": "Investigación y persecución penal",
-    "crimen_organizado": "Crimen organizado",
-    "cooperacion": "Cooperación y estándares internacionales",
-    "prevencion": "Prevención de LA/FT",
-    "gestion_uaf": "Gestión institucional UAF",
-    "sujetos_obligados": "Sujetos obligados y cumplimiento",
-    "vulneracion_sectorial": "Vulneración de industrias supervisadas",
-    "otros": "Otros asuntos UAF/LAFT",
+    "prevencion": ["prevencion", "lavado de activos", "debida diligencia", "cumplimiento"],
+    "investigacion_penal": ["fiscalia", "investigacion", "formalizacion", "imputado"],
+    "regulacion": ["proyecto de ley", "circular", "normativa", "regulacion"],
+    "inteligencia_financiera": ["inteligencia financiera", "ruta del dinero", "uaf"],
+    "crimen_organizado": ["crimen organizado", "tren de aragua", "banda criminal"],
+    "fiscalizacion": ["fiscalizacion", "sancion", "multa"],
+    "cooperacion": ["gafilat", "gafi", "cooperacion internacional", "milaft"],
+    "tecnologia": ["transformacion digital", "tecnologia", "cibercrimen", "criptoactivo"],
+    "sujetos_obligados": ["sujeto obligado", "entidad reportante", "reporte de operaciones"],
 }
 
-TIPOS_MEDIO = {
-    "economico": ["diario financiero", "df mas", "df más", "df sud", "pulso", "estrategia",
-                  "revista capital", "mercurio inversiones", "mundo maritimo"],
-    "television_radio": ["cnn chile", "24 horas", "t13", "tele13", "meganoticias", "mega",
-                         "chv noticias", "chilevision", "chilevisión", "biobiochile",
-                         "radio biobio", "radio bío bío", "cooperativa", "adn radio",
-                         "radio agricultura", "radio duna", "pauta", "tvn", "canal 13"],
-    "juridico": ["diario constitucional", "estado diario", "mercurio legal", "idealex"],
-    "investigacion_digital": ["ciper", "interferencia", "el mostrador", "ex-ante", "ex ante",
-                              "el desconcierto", "the clinic", "el dinamo", "el dínamo",
-                              "el libero", "el líbero", "el ciudadano", "diario uchile",
-                              "infogate", "el periodista"],
-    "regional": ["soychile", "estrella de", "diario de atacama", "diario concepcion",
-                 "diario concepción", "el austral", "el rancaguino", "el rancagüino",
-                 "diario el dia", "diario el día", "la discusion", "la discusión",
-                 "el observatodo", "el ovallino", "el martutino", "la prensa austral",
-                 "el pinguino", "el pingüino", "radio polar", "el repuertero",
-                 "diario de valdivia", "el divisadero", "el aconcagua", "timeline"],
-    "institucional": ["unidad de analisis financiero", "unidad de análisis financiero", "uaf",
-                      "gobierno", "ministerio", "fiscalia", "fiscalía", "ministerio publico",
-                      "ministerio público", "poder judicial", "pdi", "carabineros", "senado",
-                      "camara", "cámara", "gafilat", "cmf", "contraloria", "contraloría",
-                      "banco central", "servicio de impuestos internos", "aduanas",
-                      "diario oficial", "consejo de defensa del estado"],
-    "prensa_nacional": ["emol", "la tercera", "el mercurio", "latercera", "la segunda", "lun",
-                        "las ultimas noticias", "las últimas noticias", "la cuarta",
-                        "publimetro", "la hora"],
-}
-TIPO_MEDIO_ETIQUETA = {
-    "economico": "Prensa económica y financiera",
-    "television_radio": "Televisión y radio",
-    "juridico": "Prensa jurídica especializada",
-    "investigacion_digital": "Medio digital o de investigación",
-    "regional": "Prensa regional",
-    "institucional": "Fuente institucional",
-    "prensa_nacional": "Prensa nacional",
-    "otro": "Otro medio digital",
+SUJETOS = {
+    "bancos": ["banco", "banca", "entidad bancaria"],
+    "fintech": ["fintech", "mercado pago", "billetera digital"],
+    "casinos": ["casino de juego", "casinos de juego"],
+    "notarios": ["notario", "notaria", "conservador"],
+    "inmobiliarias": ["inmobiliaria", "corredor de propiedades", "bienes raices"],
+    "automotoras": ["automotora", "compraventa de vehiculos", "vehiculo de lujo"],
+    "valores": ["corredora de bolsa", "administradora general de fondos", "agf", "mercado de valores"],
+    "remesadoras": ["remesadora", "casa de cambio", "transferencia de dinero"],
+    "contadores": ["contador", "auditor externo"],
+    "abogados": ["abogado", "estudio juridico"],
+    "sector_publico": ["servicio publico", "municipalidad", "empresa publica"],
 }
 
-ROL_SUJETO_ETIQUETA = {
-    "victima": "Víctima o sector afectado",
-    "canal": "Canal utilizado para mover o integrar fondos",
-    "investigado": "Entidad o sector investigado",
-    "regulado": "Sector afectado por regulación o supervisión",
-    "mencionado": "Sector mencionado",
+LABELS = {
+    "fenomeno": {
+        "contrabando": "Contrabando y comercio ilícito", "crimen_organizado": "Crimen organizado",
+        "corrupcion": "Corrupción", "narcotrafico": "Narcotráfico", "fraude": "Fraude y estafas",
+        "apuestas": "Apuestas y juego ilegal", "cibercrimen": "Cibercrimen y criptoactivos",
+        "sartor": "Caso Sartor", "tren_de_aragua": "Tren de Aragua", "trata": "Trata de personas",
+        "otro": "Otros focos",
+    },
+    "naturaleza": {
+        "institucional": "Institucional", "legislativo": "Legislativo", "regulatorio": "Regulatorio",
+        "judicial": "Judicial", "policial": "Policial", "opinion": "Opinión / editorial",
+        "analisis": "Análisis / reportaje",
+    },
+    "precedentes": {
+        "corrupcion": "Corrupción", "narcotrafico": "Narcotráfico", "contrabando": "Contrabando",
+        "fraude": "Fraude y estafa", "delitos_economicos": "Delitos económicos", "trata": "Trata de personas",
+        "tributarios": "Delitos tributarios", "indeterminado": "No determinado",
+    },
+    "topicos": {
+        "prevencion": "Prevención de LA/FT", "investigacion_penal": "Investigación y persecución penal",
+        "regulacion": "Regulación y legislación", "inteligencia_financiera": "Inteligencia financiera",
+        "crimen_organizado": "Crimen organizado", "fiscalizacion": "Fiscalización y sanciones",
+        "cooperacion": "Cooperación nacional e internacional", "tecnologia": "Tecnología y activos virtuales",
+        "sujetos_obligados": "Sujetos obligados y cumplimiento", "otros": "Otros temas",
+    },
+    "sujetos": {
+        "bancos": "Bancos", "fintech": "Fintech y medios de pago", "casinos": "Casinos de juego",
+        "notarios": "Notarios y conservadores", "inmobiliarias": "Sector inmobiliario",
+        "automotoras": "Automotoras", "valores": "Mercado de valores y fondos",
+        "remesadoras": "Casas de cambio y remesas", "contadores": "Contadores y auditores",
+        "abogados": "Abogados", "sector_publico": "Sector público",
+    },
 }
 
-NIVEL_FUENTE_ETIQUETA = {
-    "verificada": "Medio chileno verificado",
-    "chilena": "Dominio chileno (.cl)",
-    "institucional": "Fuente institucional chilena",
-    "nombre": "Identificada por nombre del medio",
-}
+# ---------------------------------------------------------------------------
+# Utilidades
+# ---------------------------------------------------------------------------
 
 
-# ─────────────────────────────────────────────────────────────
-# Utilidades de texto
-# ─────────────────────────────────────────────────────────────
-
-_lock_log = threading.Lock()
-
-
-def log(msg):
+def log(mensaje: str) -> None:
     marca = datetime.now(TZ_CL).strftime("%Y-%m-%d %H:%M:%S")
-    linea = f"[{marca}] {msg}"
-    with _lock_log:
-        print(linea, flush=True)
-        try:
-            with open(BITACORA, "a", encoding="utf-8") as fh:
-                fh.write(linea + "\n")
-        except OSError:
-            pass
+    linea = f"[{marca}] {mensaje}"
+    print(linea, flush=True)
+    try:
+        with BITACORA.open("a", encoding="utf-8") as fh:
+            fh.write(linea + "\n")
+    except OSError:
+        pass
 
 
-def normaliza(texto):
-    """Minúsculas sin tildes y con espacios colapsados."""
-    texto = str(texto or "").lower()
-    texto = unicodedata.normalize("NFD", texto)
-    texto = "".join(c for c in texto if unicodedata.category(c) != "Mn")
+def normaliza(texto: Any) -> str:
+    texto = html_mod.unescape(str(texto or ""))
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    texto = texto.lower().replace("\u00a0", " ")
     return re.sub(r"\s+", " ", texto).strip()
 
 
-def _patron_aguja(aguja):
-    n = normaliza(aguja)
-    if not n:
-        return ""
-    esc = re.escape(n).replace(r"\ ", r"\s+")
-    if " " not in n and len(n) <= 5:
-        return r"\b" + esc + r"\b"
-    return esc
+def limpia_texto(texto: Any) -> str:
+    texto = html_mod.unescape(str(texto or ""))
+    texto = re.sub(r"<[^>]+>", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
 
 
-@lru_cache(maxsize=4096)
-def _compila(agujas):
-    partes = [p for p in (_patron_aguja(a) for a in agujas) if p]
-    if not partes:
-        return None
-    return re.compile("|".join(partes))
-
-
-def contiene(texto_norm, agujas):
-    patron = _compila(tuple(agujas))
-    return bool(patron and patron.search(texto_norm or ""))
-
-
-def claves_presentes(texto_norm, taxonomia):
-    return [k for k, v in taxonomia.items() if contiene(texto_norm, v)]
-
-
-def limpia_html(s):
-    s = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", str(s or ""))
-    s = re.sub(r"<[^>]+>", " ", s)
-    s = html_mod.unescape(s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
-# ─────────────────────────────────────────────────────────────
-# URLs y clasificación de fuente
-# ─────────────────────────────────────────────────────────────
-
-AGREGADORES = {"news.google.com", "google.com", "bing.com", "www.bing.com",
-               "consent.google.com", "gdeltproject.org", "api.gdeltproject.org"}
-
-
-def dominio_url(url):
+def dominio_url(url: str) -> str:
     try:
-        host = (urllib.parse.urlsplit(url or "").hostname or "").lower().strip(".")
-    except ValueError:
+        return normaliza_dominio(urllib.parse.urlsplit(url).hostname or "")
+    except Exception:
         return ""
-    for prefijo in ("www.", "m.", "amp.", "www2.", "beta."):
-        if host.startswith(prefijo):
-            host = host[len(prefijo):]
-    return host
 
 
-def _coincide_dominio(host, dominios):
-    host = (host or "").lower().strip(".")
-    return any(host == d or host.endswith("." + d) for d in dominios)
+def fuente_para_host(host: str) -> dict[str, Any] | None:
+    host = normaliza_dominio(host)
+    if host in FUENTE_POR_DOMINIO:
+        return FUENTE_POR_DOMINIO[host]
+    candidatos = [f for d, f in FUENTE_POR_DOMINIO.items() if host.endswith("." + d)]
+    return max(candidatos, key=lambda f: len(f["dominio"]), default=None)
 
 
-def dominio_institucional(host):
-    host = (host or "").lower().strip(".")
-    if _coincide_dominio(host, DOMINIOS_INSTITUCIONALES):
-        return True
-    return host.endswith(SUFIJOS_INSTITUCIONALES)
-
-
-def nivel_dominio_chileno(host):
-    """Devuelve el nivel de confianza del dominio: verificada, institucional, chilena o ''."""
-    host = (host or "").lower().strip(".")
-    if not host or _coincide_dominio(host, DOMINIOS_VETADOS):
-        return ""
-    if dominio_institucional(host):
-        return "institucional"
-    if _coincide_dominio(host, DOMINIOS_CHILENOS):
-        return "verificada"
-    if host.endswith(SUFIJOS_CHILENOS):
-        return "chilena"
-    return ""
-
-
-def url_http(url):
+def url_canonica(url: str) -> str:
     try:
-        p = urllib.parse.urlsplit(str(url or "").strip())
-    except ValueError:
-        return False
-    return p.scheme in {"http", "https"} and bool(p.hostname)
-
-
-def limpia_url(url):
-    """Normaliza: solo http(s), sin credenciales, sin query de rastreo ni fragmento."""
-    try:
-        p = urllib.parse.urlsplit(str(url or "").strip())
-    except ValueError:
+        p = urllib.parse.urlsplit(url.strip())
+        if p.scheme not in {"http", "https"}:
+            return ""
+        host = normaliza_dominio(p.hostname or "")
+        if not host:
+            return ""
+        puerto = f":{p.port}" if p.port and p.port not in {80, 443} else ""
+        ruta = re.sub(r"/{2,}", "/", p.path or "/")
+        if ruta != "/":
+            ruta = ruta.rstrip("/")
+        params = urllib.parse.parse_qsl(p.query, keep_blank_values=False)
+        params = [(k, v) for k, v in params if not k.lower().startswith(("utm_", "fbclid", "gclid", "output"))]
+        consulta = urllib.parse.urlencode(sorted(params))
+        return urllib.parse.urlunsplit((p.scheme.lower(), host + puerto, ruta, consulta, ""))
+    except Exception:
         return ""
-    if p.scheme not in {"http", "https"} or not p.hostname:
-        return ""
-    host = p.hostname.lower()
-    if p.port and p.port not in (80, 443):
-        host = f"{host}:{p.port}"
-    query = [(k, v) for k, v in urllib.parse.parse_qsl(p.query, keep_blank_values=False)
-             if not k.lower().startswith(("utm_", "fbclid", "gclid", "mc_", "_ga"))
-             and k.lower() not in {"ref", "sref", "smid", "share", "outputtype"}]
-    return urllib.parse.urlunsplit((p.scheme, host, p.path, urllib.parse.urlencode(query), ""))
 
 
-def clasifica_fuente(reg):
-    """Determina si el registro proviene de una fuente chilena y con qué nivel.
-
-    Si existe un dominio editorial real, ese dominio manda. El nombre del medio
-    solo se usa cuando el enlace sigue siendo del agregador.
-    """
-    editoriales = []
-    for campo in ("url_final", "link", "fuente_url"):
-        host = dominio_url(reg.get(campo, ""))
-        if not host or host in AGREGADORES:
-            continue
-        editoriales.append(host)
-        nivel = nivel_dominio_chileno(host)
-        if nivel:
-            return True, nivel, host
-    if editoriales:
-        return False, "", editoriales[0]
-    medio = normaliza(reg.get("medio", ""))
-    if medio and any(normaliza(n) in medio for n in NOMBRES_MEDIOS_CHILENOS):
-        return True, "nombre", ""
-    return False, "", ""
+def id_registro(url: str, titulo: str = "") -> str:
+    base = url_canonica(url) or normaliza(titulo)
+    return hashlib.sha256(base.encode("utf-8", "ignore")).hexdigest()[:24]
 
 
-def es_fuente_chilena(reg):
-    return clasifica_fuente(reg)[0]
+def contiene(texto: str, agujas: Iterable[str]) -> bool:
+    t = normaliza(texto)
+    return any(normaliza(a) in t for a in agujas)
 
 
-def es_fuente_institucional(reg):
-    for campo in ("url_final", "link", "fuente_url"):
-        if dominio_institucional(dominio_url(reg.get(campo, ""))):
-            return True
-    return False
+def ahora_cl() -> datetime:
+    return datetime.now(TZ_CL)
 
 
-def id_estable(url, titulo=""):
-    """Identidad por URL canónica; el titular solo se usa si no hay URL utilizable."""
-    base = limpia_url(url)
-    if not base:
-        base = "titulo:" + normaliza(titulo)
-    return hashlib.sha1(normaliza(base).encode("utf-8")).hexdigest()[:14]
-
-
-def hash_url(url):
-    return hashlib.sha1(normaliza(limpia_url(url) or url or "").encode("utf-8")).hexdigest()[:16]
-
-
-# ─────────────────────────────────────────────────────────────
-# Capa de red endurecida
-# ─────────────────────────────────────────────────────────────
-
-class ErrorRed(Exception):
-    pass
-
-
-@lru_cache(maxsize=2048)
-def _host_publico(host):
-    """Evita SSRF: rechaza hosts que resuelven a rangos privados o reservados."""
-    if not host:
-        return False
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except (socket.gaierror, UnicodeError, OSError):
-        return False
-    for info in infos:
+def parsea_fecha(valor: Any, url: str = "") -> datetime | None:
+    if isinstance(valor, datetime):
+        return valor.astimezone(TZ_CL) if valor.tzinfo else valor.replace(tzinfo=TZ_CL)
+    s = limpia_texto(valor)
+    if s:
         try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return False
-        if not ip.is_global or ip.is_multicast:
-            return False
-    return bool(infos)
+            d = email.utils.parsedate_to_datetime(s)
+            if d:
+                return d.astimezone(TZ_CL) if d.tzinfo else d.replace(tzinfo=TZ_CL)
+        except Exception:
+            pass
+        s2 = s.replace("Z", "+00:00")
+        try:
+            d = datetime.fromisoformat(s2)
+            return d.astimezone(TZ_CL) if d.tzinfo else d.replace(tzinfo=TZ_CL)
+        except Exception:
+            pass
+        for formato in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(s[:10], formato).replace(tzinfo=TZ_CL)
+            except ValueError:
+                continue
+    patrones = [
+        r"/(20\d{2})/(0?[1-9]|1[0-2])/(0?[1-9]|[12]\d|3[01])(?:/|$)",
+        r"[-_/](20\d{2})[-_/](0?[1-9]|1[0-2])[-_/](0?[1-9]|[12]\d|3[01])(?:[-_/]|$)",
+    ]
+    for patron in patrones:
+        m = re.search(patron, url)
+        if m:
+            try:
+                return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=TZ_CL)
+            except ValueError:
+                pass
+    return None
 
 
-def _url_segura(url):
+def dentro_ventana(fecha_dt: datetime | None, dias: int = VENTANA_DIAS, margen: int = 2) -> bool:
+    if not fecha_dt:
+        return True
+    ahora = ahora_cl()
+    return ahora - timedelta(days=dias + margen) <= fecha_dt <= ahora + timedelta(days=1)
+
+
+# ---------------------------------------------------------------------------
+# Red segura y control por dominio
+# ---------------------------------------------------------------------------
+
+_HOST_LOCKS: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
+_ULTIMO_HOST: dict[str, float] = {}
+_ROBOTS_CACHE: dict[str, tuple[float, urllib.robotparser.RobotFileParser]] = {}
+
+
+def ip_publica(ip: str) -> bool:
+    try:
+        obj = ipaddress.ip_address(ip)
+        return not (obj.is_private or obj.is_loopback or obj.is_link_local or obj.is_reserved or obj.is_multicast)
+    except ValueError:
+        return False
+
+
+@lru_cache(maxsize=1024)
+def host_publico(host: str) -> bool:
+    host = normaliza_dominio(host)
+    if not host or host in {"localhost", "localhost.localdomain"}:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return False
+    ips = {info[4][0] for info in infos}
+    return bool(ips) and all(ip_publica(ip) for ip in ips)
+
+
+def url_publica(url: str) -> bool:
     try:
         p = urllib.parse.urlsplit(url)
-    except ValueError:
+        return p.scheme in {"http", "https"} and bool(p.hostname) and host_publico(p.hostname)
+    except Exception:
         return False
-    if p.scheme not in {"http", "https"} or not p.hostname:
-        return False
-    if p.port and p.port not in (80, 443):
-        return False
-    return _host_publico(p.hostname)
 
 
-class _Redirecciones(urllib.request.HTTPRedirectHandler):
-    max_repeats = 4
-    max_redirections = 5
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not _url_segura(newurl):
-            raise urllib.error.HTTPError(newurl, code, "redirección no permitida", headers, fp)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-_OPENER = urllib.request.build_opener(_Redirecciones())
-_OPENER.addheaders = []
-
-# Endpoints diseñados para consulta frecuente: no requieren el intervalo de
-# cortesía que se aplica a los sitios de los medios.
-INTERVALO_ESPECIAL = {
-    "news.google.com": 0.35, "bing.com": 0.5, "api.gdeltproject.org": 0.5,
-    "public.api.bsky.app": 0.6, "reddit.com": 1.2,
-}
-
-_ultimo_por_host = {}
-_lock_host = threading.Lock()
-
-
-def _espera_turno(host):
-    intervalo = INTERVALO_ESPECIAL.get(host, INTERVALO_POR_HOST)
-    if intervalo <= 0:
-        return
-    while True:
-        with _lock_host:
-            ahora = time.monotonic()
-            listo = _ultimo_por_host.get(host, 0.0) + intervalo
-            if ahora >= listo:
-                _ultimo_por_host[host] = ahora
-                return
-            espera = listo - ahora
-        time.sleep(min(espera, 2.0))
-
-
-def _descomprime(datos, headers):
-    codificacion = (headers.get("Content-Encoding") or "").lower()
+def robots_permite(url: str) -> bool:
+    if not RESPETA_ROBOTS:
+        return True
+    p = urllib.parse.urlsplit(url)
+    raiz = f"{p.scheme}://{p.netloc}"
+    ahora = time.time()
+    cached = _ROBOTS_CACHE.get(raiz)
+    if cached and ahora - cached[0] < 12 * 3600:
+        return cached[1].can_fetch(UA_ROBOTS, url)
+    rp = urllib.robotparser.RobotFileParser()
+    rp.set_url(raiz + "/robots.txt")
     try:
-        if "gzip" in codificacion:
-            return gzip.decompress(datos)
-        if "deflate" in codificacion:
+        req = urllib.request.Request(rp.url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=min(10, TIMEOUT)) as resp:
+            texto = resp.read(300_000).decode("utf-8", "ignore")
+        rp.parse(texto.splitlines())
+    except Exception:
+        rp.parse([])  # ante fallo, no bloquea todo el dominio
+    _ROBOTS_CACHE[raiz] = (ahora, rp)
+    return rp.can_fetch(UA_ROBOTS, url)
+
+
+def descomprime(datos: bytes, encoding: str) -> bytes:
+    e = (encoding or "").lower()
+    if "gzip" in e:
+        return gzip.decompress(datos)
+    if "deflate" in e:
+        try:
+            return zlib.decompress(datos)
+        except zlib.error:
             return zlib.decompress(datos, -zlib.MAX_WBITS)
-    except (OSError, zlib.error):
-        return datos
     return datos
 
 
-_robots_cache = {}
-_lock_robots = threading.Lock()
-
-
-def _robots_permite(url):
-    if not RESPETA_ROBOTS:
-        return True
+def descarga(url: str, *, permite_robots: bool = True, max_bytes: int = MAX_BYTES) -> tuple[bytes, str, dict[str, str]]:
+    if not url_publica(url):
+        raise ValueError("URL no pública o no resoluble")
+    if permite_robots and not robots_permite(url):
+        raise PermissionError("bloqueado por robots.txt")
     host = dominio_url(url)
-    p = urllib.parse.urlsplit(url)
-    clave = f"{p.scheme}://{p.netloc}"
-    with _lock_robots:
-        parser = _robots_cache.get(clave, "pendiente")
-    if parser == "pendiente":
-        parser = urllib.robotparser.RobotFileParser()
-        try:
-            datos, _, headers = descarga(clave + "/robots.txt", accept="text/plain",
-                                        max_bytes=400_000, robots=False, reintentos=1)
-            texto = _decodifica(datos, headers)
-            parser.parse(texto.splitlines())
-        except Exception:
-            parser = None  # sin robots.txt legible: se permite
-        with _lock_robots:
-            _robots_cache[clave] = parser
-    if parser is None:
-        return True
-    try:
-        return parser.can_fetch(UA_ROBOTS, url)
-    except Exception:
-        return True
+    lock = _HOST_LOCKS[host]
+    with lock:
+        espera = INTERVALO_HOST - (time.monotonic() - _ULTIMO_HOST.get(host, 0.0))
+        if espera > 0:
+            time.sleep(espera)
+        _ULTIMO_HOST[host] = time.monotonic()
+    headers = {
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.5",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "es-CL,es;q=0.9",
+        "Connection": "close",
+    }
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        final = resp.geturl()
+        if not url_publica(final):
+            raise ValueError("redirección no pública")
+        raw = resp.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise ValueError("respuesta excede límite")
+        raw = descomprime(raw, resp.headers.get("Content-Encoding", ""))
+        return raw, final, {k.lower(): v for k, v in resp.headers.items()}
 
 
-def descarga(url, accept="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-             max_bytes=None, robots=True, reintentos=2, cuerpo=None, cabeceras=None):
-    """Descarga defensiva. Devuelve (bytes, url_final, headers)."""
-    if not _url_segura(url):
-        raise ErrorRed(f"url no permitida: {url[:120]}")
-    if robots and not _robots_permite(url):
-        raise ErrorRed("robots.txt no permite el acceso")
-    tope = max_bytes or MAX_BYTES_RESPUESTA
-    host = dominio_url(url)
-    ultimo_error = None
-    for intento in range(max(1, reintentos)):
-        if tiempo_agotado(reserva=45):
-            raise ErrorRed("presupuesto de tiempo agotado")
-        _espera_turno(host)
-        cab = {
-            "User-Agent": UA,
-            "Accept": accept,
-            "Accept-Language": "es-CL,es;q=0.9",
-            "Accept-Encoding": "gzip, deflate",
-            "Cache-Control": "no-cache",
-        }
-        cab.update(cabeceras or {})
-        req = urllib.request.Request(url, headers=cab, data=cuerpo,
-                                     method="POST" if cuerpo else "GET")
-        try:
-            with _OPENER.open(req, timeout=TIMEOUT) as r:
-                bruto = r.read(tope + 1)
-                headers = dict(r.headers.items())
-                final = r.geturl()
-            if len(bruto) > tope:
-                bruto = bruto[:tope]
-            return _descomprime(bruto, headers), final, headers
-        except Exception as e:  # noqa: BLE001 — cualquier fallo de red se reintenta
-            ultimo_error = e
-            codigo = getattr(e, "code", None)
-            if codigo in (401, 403, 404, 410, 451):
-                break
-            time.sleep(0.7 * (intento + 1))
-    raise ErrorRed(f"{type(ultimo_error).__name__}: {ultimo_error}")
+# ---------------------------------------------------------------------------
+# Parsers
+# ---------------------------------------------------------------------------
 
 
-def _decodifica(contenido, headers=None):
-    headers = headers or {}
-    ctype = headers.get("Content-Type", headers.get("content-type", ""))
-    m = re.search(r"charset=[\"']?([\w.-]+)", ctype, re.I)
-    codificaciones = [m.group(1)] if m else []
-    cabeza = contenido[:2048]
-    m2 = re.search(rb"charset=[\"']?([\w.-]+)", cabeza, re.I)
-    if m2:
+class DocumentoHTML(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.titulo: list[str] = []
+        self.en_title = False
+        self.meta: dict[str, str] = {}
+        self.links: list[tuple[str, str, str]] = []
+        self._a_href = ""
+        self._a_rel = ""
+        self._a_text: list[str] = []
+        self._en_a = False
+        self._en_p = False
+        self._p_text: list[str] = []
+        self._prof_article = 0
+        self._prof_main = 0
+        self.parrafos_article: list[str] = []
+        self.parrafos_main: list[str] = []
+        self.parrafos: list[str] = []
+        self._script_tipo = ""
+        self._script_text: list[str] = []
+        self.json_ld: list[str] = []
+        self.time_values: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        a = {k.lower(): (v or "") for k, v in attrs}
+        tag = tag.lower()
+        if tag == "title":
+            self.en_title = True
+        elif tag == "meta":
+            clave = (a.get("property") or a.get("name") or a.get("itemprop") or "").lower()
+            contenido = a.get("content", "")
+            if clave and contenido:
+                self.meta[clave] = contenido
+        elif tag == "link":
+            href = a.get("href", "")
+            rel = a.get("rel", "").lower()
+            if href:
+                self.links.append((href, rel, ""))
+        elif tag == "a":
+            self._en_a = True
+            self._a_href = a.get("href", "")
+            self._a_rel = a.get("rel", "")
+            self._a_text = []
+        elif tag == "article":
+            self._prof_article += 1
+        elif tag == "main":
+            self._prof_main += 1
+        elif tag == "p":
+            self._en_p = True
+            self._p_text = []
+        elif tag == "script":
+            self._script_tipo = a.get("type", "").lower()
+            self._script_text = []
+        elif tag == "time" and a.get("datetime"):
+            self.time_values.append(a["datetime"])
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "title":
+            self.en_title = False
+        elif tag == "a" and self._en_a:
+            texto = limpia_texto(" ".join(self._a_text))
+            self.links.append((self._a_href, self._a_rel, texto))
+            self._en_a = False
+        elif tag == "p" and self._en_p:
+            texto = limpia_texto(" ".join(self._p_text))
+            if len(texto) >= 35:
+                self.parrafos.append(texto)
+                if self._prof_article:
+                    self.parrafos_article.append(texto)
+                if self._prof_main:
+                    self.parrafos_main.append(texto)
+            self._en_p = False
+        elif tag == "article" and self._prof_article:
+            self._prof_article -= 1
+        elif tag == "main" and self._prof_main:
+            self._prof_main -= 1
+        elif tag == "script":
+            if "ld+json" in self._script_tipo:
+                texto = "".join(self._script_text).strip()
+                if texto:
+                    self.json_ld.append(texto)
+            self._script_tipo = ""
+            self._script_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self.en_title:
+            self.titulo.append(data)
+        if self._en_a:
+            self._a_text.append(data)
+        if self._en_p:
+            self._p_text.append(data)
+        if self._script_tipo:
+            self._script_text.append(data)
+
+
+def decode_html(raw: bytes, headers: dict[str, str] | None = None) -> str:
+    content_type = (headers or {}).get("content-type", "")
+    m = re.search(r"charset=([\w-]+)", content_type, re.I)
+    candidatos = [m.group(1)] if m else []
+    candidatos += ["utf-8", "latin-1"]
+    for enc in candidatos:
         try:
-            codificaciones.append(m2.group(1).decode("ascii", "ignore"))
-        except Exception:
-            pass
-    codificaciones += ["utf-8", "windows-1252", "latin-1"]
-    for cod in codificaciones:
-        try:
-            return contenido.decode(cod)
+            return raw.decode(enc)
         except (UnicodeDecodeError, LookupError):
             continue
-    return contenido.decode("utf-8", errors="replace")
+    return raw.decode("utf-8", "ignore")
 
 
-def xml_seguro(contenido):
-    """Parsea XML rechazando DTD y entidades externas (XXE / billion laughs)."""
-    if isinstance(contenido, bytes):
-        muestra = contenido[:4096].lower()
-        if b"<!doctype" in muestra or b"<!entity" in muestra:
-            raise ErrorRed("xml con DTD rechazado")
-    else:
-        if "<!doctype" in contenido[:4096].lower():
-            raise ErrorRed("xml con DTD rechazado")
-    return ET.fromstring(contenido)
+def recorre_json(obj: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from recorre_json(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from recorre_json(v)
 
 
-def json_seguro(contenido, headers=None):
-    texto = _decodifica(contenido, headers) if isinstance(contenido, bytes) else contenido
-    return json.loads(texto)
-
-
-# ─────────────────────────────────────────────────────────────
-# Extracción de artículos
-# ─────────────────────────────────────────────────────────────
-
-class _ParserArticulo(HTMLParser):
-    """Extractor conservador de metadatos, cuerpo y enlaces salientes."""
-
-    BLOQUES = {"p", "h1", "h2", "h3", "h4", "li", "blockquote", "figcaption"}
-    OMITIR = {"script", "style", "noscript", "svg", "form", "button", "nav",
-              "footer", "aside", "template", "iframe"}
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.meta = {}
-        self.canonical = ""
-        self.amphtml = ""
-        self.feeds = []
-        self.time_values = []
-        self.enlaces = []
-        self.article_depth = 0
-        self.skip_depth = 0
-        self.capture_tag = None
-        self.capture_in_article = False
-        self.capture = []
-        self.article_blocks = []
-        self.all_blocks = []
-
-    def handle_starttag(self, tag, attrs):
-        tag = tag.lower()
-        a = {str(k).lower(): (v or "") for k, v in attrs}
-        if tag in self.OMITIR:
-            self.skip_depth += 1
-            return
-        if self.skip_depth:
-            return
-        if tag == "article":
-            self.article_depth += 1
-        if tag == "meta":
-            clave = (a.get("property") or a.get("name") or a.get("itemprop") or "").lower()
-            valor = a.get("content", "").strip()
-            if clave and valor:
-                self.meta.setdefault(clave, valor)
-        elif tag == "link":
-            rel = a.get("rel", "").lower()
-            tipo = a.get("type", "").lower()
-            href = a.get("href", "").strip()
-            if "canonical" in rel and href:
-                self.canonical = self.canonical or href
-            if "amphtml" in rel and href:
-                self.amphtml = self.amphtml or href
-            if "alternate" in rel and href and ("rss" in tipo or "atom" in tipo):
-                self.feeds.append(href)
-        elif tag == "time" and a.get("datetime"):
-            self.time_values.append(a["datetime"].strip())
-        elif tag == "a" and a.get("href"):
-            if len(self.enlaces) < 400:
-                self.enlaces.append(a["href"].strip())
-        if tag in self.BLOQUES and self.capture_tag is None:
-            self.capture_tag = tag
-            self.capture_in_article = self.article_depth > 0
-            self.capture = []
-
-    def handle_endtag(self, tag):
-        tag = tag.lower()
-        if tag in self.OMITIR:
-            if self.skip_depth:
-                self.skip_depth -= 1
-            return
-        if self.skip_depth:
-            return
-        if self.capture_tag == tag:
-            texto = re.sub(r"\s+", " ", " ".join(self.capture)).strip()
-            if texto:
-                self.all_blocks.append(texto)
-                if self.capture_in_article:
-                    self.article_blocks.append(texto)
-            self.capture_tag = None
-            self.capture_in_article = False
-            self.capture = []
-        if tag == "article" and self.article_depth:
-            self.article_depth -= 1
-
-    def handle_data(self, data):
-        if not self.skip_depth and self.capture_tag and data.strip():
-            self.capture.append(data.strip())
-
-
-def _objetos_jsonld(texto_html):
-    scripts = re.findall(
-        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-        texto_html, flags=re.I | re.S,
-    )
-    salida = []
-    for bloque in scripts[:12]:
-        limpio = html_mod.unescape(bloque).strip()
-        try:
-            obj = json.loads(limpio)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            continue
-        pendientes = obj if isinstance(obj, list) else [obj]
-        guardia = 0
-        while pendientes and guardia < 200:
-            guardia += 1
-            actual = pendientes.pop(0)
-            if isinstance(actual, dict):
-                salida.append(actual)
-                for clave in ("@graph", "itemListElement"):
-                    hijos = actual.get(clave)
-                    if isinstance(hijos, list):
-                        pendientes.extend(hijos)
-            elif isinstance(actual, list):
-                pendientes.extend(actual)
-    return salida
-
-
-MESES_ES = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
-    "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
-    "noviembre": 11, "diciembre": 12,
-}
-
-
-def parsea_fecha(cadena):
-    """Fechas RFC-822 e ISO habituales en RSS/Atom → datetime en huso de Chile."""
-    if not cadena:
-        return None
-    cadena = str(cadena).strip()
-    formatos = (
-        "%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S %Z",
-        "%a, %d %b %Y %H:%M:%S", "%d %b %Y %H:%M:%S %z",
-        "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z",
-        "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ",
-        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
-    )
-    for fmt in formatos:
-        try:
-            dt = datetime.strptime(cadena, fmt)
-        except ValueError:
-            continue
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc if fmt.endswith("Z") else TZ_CL)
-        return dt.astimezone(TZ_CL)
-    return None
-
-
-def parsea_fecha_flexible(valor):
-    if not valor:
-        return None
-    valor = limpia_html(str(valor)).strip()
-    if not valor:
-        return None
-    try:
-        dt = datetime.fromisoformat(valor.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=TZ_CL)
-        return dt.astimezone(TZ_CL)
-    except ValueError:
-        pass
-    dt = parsea_fecha(valor)
-    if dt:
-        return dt
-    n = normaliza(valor)
-    m = re.search(r"\b(\d{1,2})\s+(?:de\s+)?([a-z]+)\s+(?:de\s+)?(20\d{2})\b", n)
-    if m and m.group(2) in MESES_ES:
-        hora = re.search(r"\b(\d{1,2}):(\d{2})\b", n)
-        h, mi = (int(hora.group(1)), int(hora.group(2))) if hora else (12, 0)
-        try:
-            return datetime(int(m.group(3)), MESES_ES[m.group(2)], int(m.group(1)),
-                            min(h, 23), min(mi, 59), tzinfo=TZ_CL)
-        except ValueError:
-            return None
-    m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", n)
-    if m:
-        try:
-            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), 12, 0, tzinfo=TZ_CL)
-        except ValueError:
-            return None
-    return None
-
-
-RUIDO_BLOQUE = (
-    "suscribete", "suscríbete", "inicia sesion", "politica de privacidad",
-    "terminos y condiciones", "todos los derechos reservados", "aceptar cookies",
-    "lo mas leido", "lo ultimo", "compartir en", "sigue leyendo", "newsletter",
-    "regalar este articulo", "copiar enlace", "acepto los terminos",
-)
-
-
-def extrae_articulo(contenido, url_final="", headers=None):
-    texto_html = _decodifica(contenido, headers)
-    parser = _ParserArticulo()
+def extrae_articulo_html(raw: bytes, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    texto_html = decode_html(raw, headers)
+    parser = DocumentoHTML()
     try:
         parser.feed(texto_html)
-        parser.close()
     except Exception:
         pass
 
-    cuerpo_json = titulo_json = descripcion_json = url_json = ""
-    fecha_json = None
-    for obj in _objetos_jsonld(texto_html):
-        tipos = obj.get("@type", "")
-        tipos = tipos if isinstance(tipos, list) else [tipos]
-        es_articulo = any(str(t).lower() in {
-            "article", "newsarticle", "reportagenewsarticle", "analysisnewsarticle",
-            "opinionnewsarticle", "blogposting", "liveblogposting", "webpage",
-        } for t in tipos)
-        if not es_articulo and not obj.get("articleBody"):
+    titulo = parser.meta.get("og:title") or parser.meta.get("twitter:title") or limpia_texto(" ".join(parser.titulo))
+    descripcion = parser.meta.get("og:description") or parser.meta.get("description") or parser.meta.get("twitter:description") or ""
+    fecha_valor = (parser.meta.get("article:published_time") or parser.meta.get("datepublished") or
+                   parser.meta.get("date") or parser.meta.get("dc.date") or parser.meta.get("dcterms.date"))
+    cuerpo_json = ""
+    canonical = ""
+    amp = ""
+    for href, rel, _ in parser.links:
+        abs_url = urllib.parse.urljoin(url, href)
+        if "canonical" in rel.lower() and not canonical:
+            canonical = abs_url
+        if "amphtml" in rel.lower() and not amp:
+            amp = abs_url
+
+    for bloque in parser.json_ld:
+        bloque = bloque.strip().rstrip(";")
+        try:
+            obj = json.loads(bloque)
+        except json.JSONDecodeError:
             continue
-        cuerpo_json = cuerpo_json or limpia_html(obj.get("articleBody", ""))
-        titulo_json = titulo_json or limpia_html(obj.get("headline", ""))
-        descripcion_json = descripcion_json or limpia_html(obj.get("description", ""))
-        fecha_json = fecha_json or parsea_fecha_flexible(
-            obj.get("datePublished") or obj.get("dateCreated") or obj.get("dateModified"))
-        if not url_json:
-            bruto = obj.get("url") or obj.get("mainEntityOfPage") or ""
-            if isinstance(bruto, dict):
-                bruto = bruto.get("@id", "") or bruto.get("url", "")
-            url_json = str(bruto or "")
+        for nodo in recorre_json(obj):
+            tipo = nodo.get("@type")
+            tipos = {normaliza(x) for x in tipo} if isinstance(tipo, list) else {normaliza(tipo)}
+            if tipos & {"newsarticle", "article", "reportagearticle", "blogposting"} or "articlebody" in {normaliza(k) for k in nodo}:
+                titulo = nodo.get("headline") or nodo.get("name") or titulo
+                descripcion = nodo.get("description") or descripcion
+                cuerpo_json = nodo.get("articleBody") or cuerpo_json
+                fecha_valor = nodo.get("datePublished") or nodo.get("dateCreated") or fecha_valor
+                canonical = nodo.get("url") or nodo.get("mainEntityOfPage") or canonical
+                if isinstance(canonical, dict):
+                    canonical = canonical.get("@id", "")
 
-    meta = parser.meta
-    titulo = titulo_json or meta.get("og:title", "") or meta.get("twitter:title", "")
-    descripcion = (descripcion_json or meta.get("og:description", "")
-                   or meta.get("twitter:description", "") or meta.get("description", ""))
-    canonical = parser.canonical or meta.get("og:url", "") or url_json or url_final
-
-    bloques = parser.article_blocks or parser.all_blocks
-    filtrados = []
-    for b in bloques:
-        bn = normaliza(b)
-        if len(b) < 45 or any(x in bn for x in map(normaliza, RUIDO_BLOQUE)):
+    parrafos = parser.parrafos_article or parser.parrafos_main or parser.parrafos
+    # Quita frases de navegación y publicidad reiteradas.
+    limpios: list[str] = []
+    vistos: set[str] = set()
+    for p in parrafos:
+        n = normaliza(p)
+        if len(n) < 35 or n in vistos:
             continue
-        filtrados.append(b)
-    # Se combinan JSON-LD y párrafos visibles: si la mención a la UAF está en un
-    # solo lugar, conviene conservar ambas fuentes de texto.
-    partes = [cuerpo_json] if cuerpo_json else []
-    base_norm = normaliza(cuerpo_json)
-    for bloque in filtrados:
-        if normaliza(bloque)[:120] not in base_norm:
-            partes.append(bloque)
-    cuerpo = re.sub(r"\s+", " ", "\n".join(partes)).strip()[:MAX_TEXTO_ANALISIS]
-
-    fecha = fecha_json
-    if not fecha:
-        for candidato in (meta.get("article:published_time", ""), meta.get("date", ""),
-                          meta.get("datepublished", ""), meta.get("pubdate", ""),
-                          meta.get("article:modified_time", ""), *parser.time_values[:6]):
-            fecha = parsea_fecha_flexible(candidato)
-            if fecha:
+        if contiene(n, ["suscribete", "inicia sesion", "todos los derechos reservados", "compartir en facebook", "publicidad"]):
+            continue
+        vistos.add(n)
+        limpios.append(p)
+    cuerpo = limpia_texto(cuerpo_json) or "\n".join(limpios)
+    if len(cuerpo) > MAX_TEXTO_ANALISIS:
+        cuerpo = cuerpo[:MAX_TEXTO_ANALISIS]
+    fecha_dt = parsea_fecha(fecha_valor, canonical or url)
+    if not fecha_dt:
+        for t in parser.time_values:
+            fecha_dt = parsea_fecha(t, canonical or url)
+            if fecha_dt:
                 break
-    if not fecha:
-        fecha = parsea_fecha_flexible(" ".join((parser.article_blocks or parser.all_blocks)[:6]))
-
-    enlaces_uaf = [e for e in parser.enlaces if "uaf.cl" in e.lower()]
     return {
-        "titulo": limpia_html(titulo),
-        "descripcion": limpia_html(descripcion),
-        "cuerpo": cuerpo,
-        "fecha_dt": fecha,
-        "canonical": canonical,
-        "amphtml": parser.amphtml,
-        "feeds": parser.feeds,
-        "enlaza_uaf": bool(enlaces_uaf),
+        "titulo": limpia_texto(titulo)[:500],
+        "resumen": limpia_texto(descripcion)[:1200],
+        "texto_enriquecido": cuerpo,
+        "fecha_dt": fecha_dt,
+        "url_final": url_canonica(canonical or url),
+        "amp_url": url_canonica(amp),
+        "links": parser.links,
     }
 
 
-def enriquece_articulo(reg):
-    """Descarga y analiza el cuerpo del artículo. Nunca lanza excepción."""
-    r = dict(reg)
-    r["fuente_institucional"] = es_fuente_institucional(r)
-    enlace = r.get("link", "")
-    if not url_http(enlace):
-        r.setdefault("texto_enriquecido", "")
-        r["cuerpo_extraido"] = False
-        r["enriquecido"] = False
-        return r
+def parsea_feed(raw: bytes, base_url: str, origen: str) -> list[dict[str, Any]]:
+    if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+        raise ValueError("XML con DTD/entidades rechazado")
+    raiz = ET.fromstring(raw)
+    resultados: list[dict[str, Any]] = []
+    items = list(raiz.findall(".//item"))
+    if items:
+        for item in items:
+            def txt(etiqueta: str) -> str:
+                nodo = item.find(etiqueta)
+                return limpia_texto("".join(nodo.itertext())) if nodo is not None else ""
+            link = txt("link") or txt("guid")
+            if not link:
+                continue
+            resultados.append({
+                "titulo": txt("title"), "resumen": txt("description"), "link": urllib.parse.urljoin(base_url, link),
+                "fecha_dt": parsea_fecha(txt("pubDate") or txt("date"), link), "origen_busqueda": origen,
+            })
+        return resultados
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+
+    def primer_nodo(entry: ET.Element, rutas: Iterable[str]) -> ET.Element | None:
+        for ruta in rutas:
+            nodo = entry.find(ruta, ns) if ruta.startswith("a:") else entry.find(ruta)
+            if nodo is not None:
+                return nodo
+        return None
+
+    entradas = raiz.findall(".//a:entry", ns)
+    if not entradas:
+        entradas = raiz.findall(".//entry")
+    for entry in entradas:
+        titulo_nodo = primer_nodo(entry, ("a:title", "title"))
+        titulo = limpia_texto("".join(titulo_nodo.itertext())) if titulo_nodo is not None else ""
+        resumen_nodo = primer_nodo(entry, ("a:summary", "a:content", "summary", "content"))
+        resumen = limpia_texto("".join(resumen_nodo.itertext())) if resumen_nodo is not None else ""
+        link = ""
+        for ln in entry.findall("a:link", ns) + entry.findall("link"):
+            href = ln.attrib.get("href", "")
+            if href and ln.attrib.get("rel", "alternate") in {"alternate", ""}:
+                link = href
+                break
+        fecha = primer_nodo(entry, ("a:published", "a:updated", "published", "updated"))
+        if link:
+            resultados.append({"titulo": titulo, "resumen": resumen, "link": urllib.parse.urljoin(base_url, link),
+                               "fecha_dt": parsea_fecha(fecha.text if fecha is not None else "", link), "origen_busqueda": origen})
+    return resultados
+
+
+def parsea_sitemap(raw: bytes, base_url: str) -> tuple[list[dict[str, Any]], list[str]]:
+    if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+        raise ValueError("XML con DTD/entidades rechazado")
+    raiz = ET.fromstring(raw)
+    tag = raiz.tag.lower()
+    urls: list[dict[str, Any]] = []
+    indices: list[str] = []
+    if tag.endswith("sitemapindex"):
+        for sm in list(raiz):
+            loc = next((limpia_texto(n.text) for n in list(sm) if n.tag.lower().endswith("loc")), "")
+            if loc:
+                indices.append(urllib.parse.urljoin(base_url, loc))
+        return urls, indices
+    for nodo in list(raiz):
+        loc = ""
+        lastmod = ""
+        titulo = ""
+        for n in nodo.iter():
+            low = n.tag.lower()
+            if low.endswith("loc") and not loc:
+                loc = limpia_texto(n.text)
+            elif low.endswith("lastmod") and not lastmod:
+                lastmod = limpia_texto(n.text)
+            elif low.endswith("title") and not titulo:
+                titulo = limpia_texto(n.text)
+        if loc:
+            urls.append({"titulo": titulo, "resumen": "", "link": urllib.parse.urljoin(base_url, loc),
+                         "fecha_dt": parsea_fecha(lastmod, loc), "origen_busqueda": "sitemap"})
+    return urls, indices
+
+
+def extrae_enlaces_pagina(raw: bytes, base_url: str, host_objetivo: str, nombre: str) -> list[dict[str, Any]]:
+    parser = DocumentoHTML()
     try:
-        contenido, final, headers = descarga(enlace)
-        datos = extrae_articulo(contenido, final, headers)
+        parser.feed(decode_html(raw))
+    except Exception:
+        return []
+    salida: list[dict[str, Any]] = []
+    vistos: set[str] = set()
+    for href, rel, texto in parser.links:
+        if not href or href.startswith(("#", "mailto:", "javascript:")):
+            continue
+        url = url_canonica(urllib.parse.urljoin(base_url, href))
+        if not url or dominio_url(url) != normaliza_dominio(host_objetivo) or url in vistos:
+            continue
+        ruta = urllib.parse.urlsplit(url).path.lower()
+        if any(x in ruta for x in ("/tag/", "/categoria/", "/autor/", "/contact", "/login", "/suscripcion")):
+            continue
+        if len(texto) < 18 and not re.search(r"/20\d{2}/", ruta):
+            continue
+        vistos.add(url)
+        salida.append({"titulo": texto[:500], "resumen": "", "link": url,
+                       "fecha_dt": parsea_fecha("", url), "medio": nombre,
+                       "origen_busqueda": "seccion_directa"})
+    return salida
 
-        canonical = urllib.parse.urljoin(final, datos.get("canonical") or "") or final
-        if dominio_url(canonical) in AGREGADORES and dominio_url(final) not in AGREGADORES:
-            canonical = final
 
-        # Segundo intento en la URL canónica cuando aporta más texto.
-        if (canonical and canonical != final and nivel_dominio_chileno(dominio_url(canonical))
-                and len(datos.get("cuerpo", "")) < 1200):
+# ---------------------------------------------------------------------------
+# Descubrimiento
+# ---------------------------------------------------------------------------
+
+_COBERTURA: dict[str, dict[str, Any]] = {}
+
+
+def cobertura(host: str, canal: str, resultados: int = 0, error: str = "") -> None:
+    f = fuente_para_host(host) or {"nombre": host, "dominio": host}
+    reg = _COBERTURA.setdefault(f["dominio"], {
+        "fuente": f["nombre"], "dominio": f["dominio"], "canales": {}, "resultados": 0,
+        "errores": [], "consultada": True,
+    })
+    reg["canales"][canal] = reg["canales"].get(canal, 0) + max(0, resultados)
+    reg["resultados"] += max(0, resultados)
+    if error and error not in reg["errores"]:
+        reg["errores"].append(error[:200])
+
+
+def consulta_google_news(query: str) -> list[dict[str, Any]]:
+    url = "https://news.google.com/rss/search?" + urllib.parse.urlencode({
+        "q": query, "hl": "es-419", "gl": "CL", "ceid": "CL:es-419"
+    })
+    raw, final, _ = descarga(url, permite_robots=False)
+    regs = parsea_feed(raw, final, "google_news")
+    for r in regs:
+        r["consulta"] = query
+    return regs
+
+
+def consulta_bing(query: str) -> list[dict[str, Any]]:
+    url = "https://www.bing.com/news/search?" + urllib.parse.urlencode({"q": query, "format": "rss", "setlang": "es", "cc": "cl"})
+    raw, final, _ = descarga(url, permite_robots=False)
+    regs = parsea_feed(raw, final, "bing_news")
+    for r in regs:
+        r["consulta"] = query
+    return regs
+
+
+def parsea_resultados_duckduckgo(raw: bytes, query: str) -> list[dict[str, Any]]:
+    texto = decode_html(raw)
+    patron = re.compile(r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', re.I | re.S)
+    salida = []
+    for href, titulo_html in patron.findall(texto):
+        href = html_mod.unescape(href)
+        p = urllib.parse.urlsplit(urllib.parse.urljoin("https://duckduckgo.com", href))
+        qs = urllib.parse.parse_qs(p.query)
+        url = qs.get("uddg", [href])[0]
+        url = url_canonica(urllib.parse.unquote(url))
+        if url:
+            salida.append({"titulo": limpia_texto(titulo_html), "resumen": "", "link": url,
+                           "fecha_dt": parsea_fecha("", url), "origen_busqueda": "duckduckgo", "consulta": query})
+    return salida
+
+
+def consulta_duckduckgo(query: str) -> list[dict[str, Any]]:
+    url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
+    raw, _, _ = descarga(url, permite_robots=False)
+    return parsea_resultados_duckduckgo(raw, query)
+
+
+def consultas_segmentadas(ahora: datetime) -> list[str]:
+    consultas: list[str] = []
+    inicio = (ahora - timedelta(days=VENTANA_DIAS)).date()
+    cursor = inicio
+    while cursor <= ahora.date():
+        fin = min(cursor + timedelta(days=5), ahora.date() + timedelta(days=1))
+        consultas.append(f'"Unidad de Análisis Financiero" after:{cursor.isoformat()} before:{fin.isoformat()}')
+        consultas.append(f'"UAF" "lavado de activos" after:{cursor.isoformat()} before:{fin.isoformat()}')
+        cursor = fin
+    return consultas
+
+
+def consultas_site(modo: str) -> list[tuple[str, str]]:
+    fuentes = FUENTES if modo == "conciliacion" else [f for f in FUENTES if int(f.get("prioridad", 0)) >= 8]
+    pares: list[tuple[str, str]] = []
+    for f in fuentes:
+        d = f["dominio"]
+        pares.append((d, f'site:{d} "Unidad de Análisis Financiero"'))
+        if modo == "conciliacion" or int(f.get("prioridad", 0)) >= 9:
+            pares.append((d, f'site:{d} UAF ("lavado de activos" OR "operaciones sospechosas" OR "antecedentes a la UAF")'))
+    return pares[:MAX_SITE_QUERIES]
+
+
+def descubre_agregadores(modo: str) -> list[dict[str, Any]]:
+    consultas = list(CONSULTAS_UAF)
+    if modo == "conciliacion":
+        consultas += consultas_segmentadas(ahora_cl()) + CONSULTAS_CONTEXTO
+    else:
+        consultas += CONSULTAS_CONTEXTO[:5]
+    resultados: list[dict[str, Any]] = []
+    for i, q in enumerate(consultas):
+        if tiempo_agotado(180):
+            break
+        for nombre, fn in (("google_news", consulta_google_news), ("bing_news", consulta_bing)):
             try:
-                c2, f2, h2 = descarga(canonical)
-                d2 = extrae_articulo(c2, f2, h2)
-                if len(d2.get("cuerpo", "")) > len(datos.get("cuerpo", "")):
-                    datos, final, canonical = d2, f2, (d2.get("canonical") or f2)
+                regs = fn(q)
+                resultados.extend(regs)
+                log(f"{nombre}: {len(regs):3d} · {q[:74]}")
+            except Exception as exc:
+                log(f"! {nombre}: {type(exc).__name__}: {exc}")
+        if i < (8 if modo == "conciliacion" else 3):
+            try:
+                resultados.extend(consulta_duckduckgo(q))
+            except Exception as exc:
+                log(f"! duckduckgo: {type(exc).__name__}: {exc}")
+    for host, q in consultas_site(modo):
+        if tiempo_agotado(180):
+            break
+        try:
+            regs = consulta_google_news(q)
+            for r in regs:
+                r["origen_busqueda"] = "site_google_news"
+            resultados.extend(regs)
+            cobertura(host, "site_google_news", len(regs))
+            if modo == "conciliacion" and len(regs) < 3 and not tiempo_agotado(170):
+                try:
+                    alternos = consulta_duckduckgo(q)
+                    for r in alternos:
+                        r["origen_busqueda"] = "site_duckduckgo"
+                    resultados.extend(alternos)
+                    cobertura(host, "site_duckduckgo", len(alternos))
+                except Exception as exc_ddg:
+                    cobertura(host, "site_duckduckgo", 0, f"{type(exc_ddg).__name__}: {exc_ddg}")
+        except Exception as exc:
+            cobertura(host, "site_google_news", 0, f"{type(exc).__name__}: {exc}")
+    return resultados
+
+
+def descubre_endpoints(fuente: dict[str, Any], modo: str) -> tuple[list[str], list[str]]:
+    feeds = list(dict.fromkeys(fuente.get("feeds", [])))
+    sitemaps = list(dict.fromkeys(fuente.get("sitemaps", [])))
+    if modo != "conciliacion" and (feeds or sitemaps):
+        return feeds, sitemaps
+    host = fuente["dominio"]
+    base = f"https://{host}"
+    candidatos_feed = feeds + [base + ruta for ruta in RUTAS_FEED]
+    candidatos_sm = sitemaps + [base + ruta for ruta in RUTAS_SITEMAP]
+    # robots.txt puede declarar sitemaps.
+    try:
+        raw, _, _ = descarga(base + "/robots.txt", permite_robots=False, max_bytes=500_000)
+        for linea in decode_html(raw).splitlines():
+            if linea.lower().startswith("sitemap:"):
+                candidatos_sm.append(linea.split(":", 1)[1].strip())
+    except Exception:
+        pass
+    return list(dict.fromkeys(candidatos_feed)), list(dict.fromkeys(candidatos_sm))
+
+
+def descubre_fuente(fuente: dict[str, Any], modo: str) -> list[dict[str, Any]]:
+    host = fuente["dominio"]
+    salida: list[dict[str, Any]] = []
+    feeds, sitemaps = descubre_endpoints(fuente, modo)
+    limite_feeds = len(feeds) if modo == "conciliacion" else min(3, len(feeds))
+    for url in feeds[:limite_feeds]:
+        if tiempo_agotado(150):
+            break
+        try:
+            raw, final, _ = descarga(url, permite_robots=False)
+            regs = parsea_feed(raw, final, "feed_directo")
+            for r in regs:
+                r["medio"] = fuente["nombre"]
+            salida.extend(regs)
+            cobertura(host, "feed", len(regs))
+            if regs:
+                break
+        except Exception as exc:
+            cobertura(host, "feed", 0, f"{type(exc).__name__}: {exc}")
+
+    cola = list(sitemaps[:MAX_SITEMAPS_POR_FUENTE])
+    vistos_sm: set[str] = set()
+    visitados = 0
+    while cola and visitados < MAX_SITEMAPS_POR_FUENTE and not tiempo_agotado(150):
+        sm = cola.pop(0)
+        if sm in vistos_sm:
+            continue
+        vistos_sm.add(sm)
+        visitados += 1
+        try:
+            raw, final, _ = descarga(sm, permite_robots=False)
+            regs, indices = parsea_sitemap(raw, final)
+            if regs:
+                recientes = [r for r in regs if dentro_ventana(r.get("fecha_dt"))]
+                for r in recientes[:MAX_URLS_SITEMAP]:
+                    r["medio"] = fuente["nombre"]
+                salida.extend(recientes[:MAX_URLS_SITEMAP])
+                cobertura(host, "sitemap", len(recientes[:MAX_URLS_SITEMAP]))
+            if indices:
+                # Prefiere news y sitemaps recientes; en conciliación permite índices generales.
+                indices.sort(key=lambda x: ("news" not in x.lower(), "2026" not in x.lower(), x))
+                cola.extend(indices[:MAX_SITEMAPS_POR_FUENTE - visitados])
+        except Exception as exc:
+            cobertura(host, "sitemap", 0, f"{type(exc).__name__}: {exc}")
+
+    secciones = fuente.get("secciones", [])
+    limite_sec = len(secciones) if modo == "conciliacion" else min(1, len(secciones))
+    for sec in secciones[:limite_sec]:
+        if tiempo_agotado(150):
+            break
+        try:
+            raw, final, _ = descarga(sec, permite_robots=False)
+            regs = extrae_enlaces_pagina(raw, final, host, fuente["nombre"])
+            salida.extend(regs)
+            cobertura(host, "seccion", len(regs))
+        except Exception as exc:
+            cobertura(host, "seccion", 0, f"{type(exc).__name__}: {exc}")
+    return salida
+
+
+def fuentes_para_corrida(modo: str, estado: dict[str, Any]) -> list[dict[str, Any]]:
+    if modo == "conciliacion":
+        return FUENTES
+    prioritarias = [f for f in FUENTES if int(f.get("prioridad", 0)) >= 8]
+    resto = [f for f in FUENTES if f not in prioritarias]
+    n = env_int("MONITOR_FUENTES_ROTACION", 14)
+    idx = int(estado.get("rotacion_fuentes", 0)) % max(1, len(resto))
+    rotadas = (resto + resto)[idx:idx + n]
+    estado["rotacion_fuentes"] = (idx + n) % max(1, len(resto))
+    return list({f["dominio"]: f for f in prioritarias + rotadas}.values())
+
+
+def descubre_directo(modo: str, estado: dict[str, Any]) -> list[dict[str, Any]]:
+    fuentes = fuentes_para_corrida(modo, estado)
+    salida: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=min(HILOS, 6)) as ex:
+        futuros = {ex.submit(descubre_fuente, f, modo): f for f in fuentes}
+        for fut in as_completed(futuros):
+            f = futuros[fut]
+            try:
+                regs = fut.result()
+                salida.extend(regs)
+                log(f"directo {f['dominio']}: {len(regs)} candidatos")
+            except Exception as exc:
+                cobertura(f["dominio"], "directo", 0, f"{type(exc).__name__}: {exc}")
+    return salida
+
+
+def resuelve_google_news(reg: dict[str, Any]) -> dict[str, Any]:
+    if tiempo_agotado(90):
+        return reg
+    url = reg.get("link", "")
+    if dominio_url(url) != "news.google.com":
+        return reg
+    try:
+        raw, final, headers = descarga(url, permite_robots=False, max_bytes=2_000_000)
+        if dominio_url(final) != "news.google.com":
+            reg["link"] = final
+            return reg
+        html = decode_html(raw, headers)
+        # Busca canonical o un enlace externo de la fuente.
+        p = DocumentoHTML()
+        p.feed(html)
+        candidatos = []
+        for href, rel, texto in p.links:
+            abs_url = urllib.parse.urljoin(final, href)
+            h = dominio_url(abs_url)
+            if h and h not in DOMINIOS_VETADOS and h != "news.google.com":
+                candidatos.append(abs_url)
+        if candidatos:
+            reg["link"] = candidatos[0]
+    except Exception:
+        pass
+    return reg
+
+
+def puntaje_candidato(reg: dict[str, Any], modo: str) -> int:
+    texto = normaliza((reg.get("titulo") or "") + " " + (reg.get("resumen") or ""))
+    host = dominio_url(reg.get("link", ""))
+    fuente = fuente_para_host(host)
+    p = int(fuente.get("prioridad", 3) if fuente else 1)
+    if MENCION_UAF_RE.search(texto):
+        p += 18
+    p += 3 * sum(1 for s in SENALES_LAFT if normaliza(s) in texto)
+    if reg.get("fecha_dt"):
+        edad = (ahora_cl() - reg["fecha_dt"]).days
+        p += max(0, 8 - edad // 3)
+    if reg.get("origen_busqueda") in {"sitemap", "feed_directo", "site_google_news"}:
+        p += 3
+    if modo == "conciliacion":
+        p += 2
+    return p
+
+
+def normaliza_candidatos(registros: list[dict[str, Any]], modo: str) -> list[dict[str, Any]]:
+    """Resuelve enlaces de agregadores y unifica candidatos por URL canónica.
+
+    Los enlaces de Google News requieren una petición adicional. Se resuelven en
+    paralelo y con un límite distinto por modo, evitando que esta etapa consuma
+    todo el presupuesto antes del barrido directo de fuentes.
+    """
+    directos: list[dict[str, Any]] = []
+    google: list[dict[str, Any]] = []
+    vistos_google: set[str] = set()
+    for original in registros:
+        reg = dict(original)
+        if dominio_url(reg.get("link", "")) == "news.google.com":
+            clave = reg.get("link", "")
+            if clave and clave not in vistos_google:
+                google.append(reg)
+                vistos_google.add(clave)
+        else:
+            directos.append(reg)
+
+    google.sort(key=lambda r: (bool(MENCION_UAF_RE.search(normaliza((r.get("titulo") or "") + " " + (r.get("resumen") or "")))),
+                               r.get("fecha_dt") or datetime.min.replace(tzinfo=TZ_CL)), reverse=True)
+    limite_google = MAX_GOOGLE_RESOLVER_CONCILIACION if modo == "conciliacion" else MAX_GOOGLE_RESOLVER_RAPIDO
+    google = google[:limite_google]
+    resueltos: list[dict[str, Any]] = []
+    if google and not tiempo_agotado(150):
+        ex = ThreadPoolExecutor(max_workers=min(HILOS, 8))
+        futuros = [ex.submit(resuelve_google_news, r) for r in google]
+        try:
+            for fut in as_completed(futuros):
+                if tiempo_agotado(130):
+                    for pendiente in futuros:
+                        pendiente.cancel()
+                    break
+                try:
+                    resueltos.append(fut.result())
+                except Exception:
+                    pass
+        finally:
+            ex.shutdown(wait=True, cancel_futures=True)
+
+    por_url: dict[str, dict[str, Any]] = {}
+    for reg in directos + resueltos:
+        if tiempo_agotado(120):
+            break
+        url = url_canonica(reg.get("link", ""))
+        if not url:
+            continue
+        host = dominio_url(url)
+        fuente = fuente_para_host(host)
+        if not fuente or host in DOMINIOS_VETADOS:
+            continue
+        fecha_dt = reg.get("fecha_dt") or parsea_fecha("", url)
+        if fecha_dt and not dentro_ventana(fecha_dt):
+            continue
+        reg["link"] = url
+        reg["fecha_dt"] = fecha_dt
+        reg["medio"] = reg.get("medio") or fuente["nombre"]
+        reg["fuente_url"] = f"https://{fuente['dominio']}"
+        reg["tipo_fuente"] = fuente["tipo"]
+        reg["fuente_institucional"] = bool(fuente.get("oficial"))
+        reg["origenes_busqueda"] = [reg.get("origen_busqueda", "desconocido")]
+        reg["_puntaje"] = puntaje_candidato(reg, modo)
+        anterior = por_url.get(url)
+        if anterior:
+            anterior["origenes_busqueda"] = sorted(set(anterior.get("origenes_busqueda", []) + reg["origenes_busqueda"]))
+            if len(reg.get("titulo", "")) > len(anterior.get("titulo", "")):
+                anterior["titulo"] = reg["titulo"]
+            if len(reg.get("resumen", "")) > len(anterior.get("resumen", "")):
+                anterior["resumen"] = reg["resumen"]
+            anterior["_puntaje"] = max(anterior.get("_puntaje", 0), reg["_puntaje"])
+        else:
+            por_url[url] = reg
+    candidatos = list(por_url.values())
+    candidatos.sort(key=lambda r: (r.get("_puntaje", 0), r.get("fecha_dt") or datetime.min.replace(tzinfo=TZ_CL)), reverse=True)
+    return candidatos[:MAX_CANDIDATOS]
+
+
+def selecciona_barrido_equilibrado(candidatos: list[dict[str, Any]], limite: int, minimo: int | None = None) -> list[dict[str, Any]]:
+    minimo = MIN_POR_FUENTE if minimo is None else minimo
+    por_host: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for c in candidatos:
+        por_host[dominio_url(c.get("link", ""))].append(c)
+    elegidos: list[dict[str, Any]] = []
+    vistos: set[str] = set()
+    hosts = sorted(por_host, key=lambda h: max((x.get("_puntaje", 0) for x in por_host[h]), default=0), reverse=True)
+    for ronda in range(minimo):
+        for host in hosts:
+            if len(elegidos) >= limite:
+                return elegidos
+            if ronda < len(por_host[host]):
+                c = por_host[host][ronda]
+                if c["link"] not in vistos:
+                    elegidos.append(c)
+                    vistos.add(c["link"])
+    for c in candidatos:
+        if len(elegidos) >= limite:
+            break
+        if c["link"] not in vistos:
+            elegidos.append(c)
+            vistos.add(c["link"])
+    return elegidos
+
+
+# ---------------------------------------------------------------------------
+# Extracción y validación
+# ---------------------------------------------------------------------------
+
+
+def enriquece_articulo(reg: dict[str, Any]) -> dict[str, Any]:
+    r = dict(reg)
+    if tiempo_agotado(60):
+        r.update({"cuerpo_extraido": False, "estado_extraccion": "presupuesto_agotado",
+                  "error_enriquecimiento": "presupuesto global agotado"})
+        return r
+    url = r["link"]
+    try:
+        raw, final, headers = descarga(url)
+        content_type = headers.get("content-type", "").lower()
+        if "pdf" in content_type or final.lower().endswith(".pdf"):
+            r.update({"url_final": url_canonica(final), "cuerpo_extraido": False,
+                      "error_enriquecimiento": "documento_pdf_sin_texto", "estado_extraccion": "pendiente_pdf"})
+            return r
+        art = extrae_articulo_html(raw, final, headers)
+        if art.get("amp_url") and len(art.get("texto_enriquecido", "")) < 300:
+            try:
+                raw_amp, final_amp, h_amp = descarga(art["amp_url"])
+                art_amp = extrae_articulo_html(raw_amp, final_amp, h_amp)
+                if len(art_amp.get("texto_enriquecido", "")) > len(art.get("texto_enriquecido", "")):
+                    art = art_amp
+                    art["origen_cuerpo"] = "amp"
             except Exception:
                 pass
-
-        # Respaldo AMP cuando la versión principal entrega poco texto.
-        base = canonical if nivel_dominio_chileno(dominio_url(canonical)) else final
-        if len(datos.get("cuerpo", "")) < 300:
-            for amp in _urls_amp(datos.get("amphtml"), base):
-                try:
-                    c3, f3, h3 = descarga(amp)
-                    d3 = extrae_articulo(c3, f3, h3)
-                    if len(d3.get("cuerpo", "")) > len(datos.get("cuerpo", "")):
-                        datos = d3
-                        break
-                except Exception:
-                    continue
-
-        publica = canonical if nivel_dominio_chileno(dominio_url(canonical)) else final
-        if nivel_dominio_chileno(dominio_url(publica)):
-            limpia = limpia_url(publica)
-            if limpia:
-                r["link"] = limpia
-                r["url_final"] = limpia
-        titulo_actual = normaliza(r.get("titulo", ""))
-        if datos.get("titulo") and (not titulo_actual or titulo_actual in {"ver noticia", "noticia"}
-                                    or len(datos["titulo"]) > len(r.get("titulo", "")) + 12):
-            r["titulo"] = datos["titulo"][:500]
-        if datos.get("cuerpo"):
-            r["texto_enriquecido"] = datos["cuerpo"]
-            r["cuerpo_extraido"] = True
-        else:
-            r.setdefault("texto_enriquecido", "")
-            r["cuerpo_extraido"] = False
-        if datos.get("descripcion") and len(datos["descripcion"]) > len(r.get("resumen", "")):
-            r["resumen"] = datos["descripcion"][:900]
-        elif not r.get("resumen") and datos.get("cuerpo"):
-            r["resumen"] = datos["cuerpo"][:900]
-        if datos.get("fecha_dt") and not r.get("fecha_dt"):
-            r["fecha_dt"] = datos["fecha_dt"]
-        if datos.get("enlaza_uaf"):
-            r["enlaza_uaf"] = True
-        r["fuente_institucional"] = es_fuente_institucional(r)
-        r["enriquecido"] = True
-    except Exception as e:  # noqa: BLE001
-        r.setdefault("texto_enriquecido", "")
-        r["cuerpo_extraido"] = False
-        r["enriquecido"] = False
-        r["error_enriquecimiento"] = type(e).__name__
+        if art.get("titulo") and len(art["titulo"]) > len(r.get("titulo", "")):
+            r["titulo"] = art["titulo"]
+        if art.get("resumen") and len(art["resumen"]) > len(r.get("resumen", "")):
+            r["resumen"] = art["resumen"]
+        r["texto_enriquecido"] = art.get("texto_enriquecido", "")
+        r["fecha_dt"] = art.get("fecha_dt") or r.get("fecha_dt") or parsea_fecha("", final)
+        r["link"] = art.get("url_final") or url_canonica(final) or url
+        r["url_final"] = r["link"]
+        r["cuerpo_extraido"] = len(r.get("texto_enriquecido", "")) >= 180
+        r["estado_extraccion"] = "completo" if r["cuerpo_extraido"] else "cuerpo_insuficiente"
+        if not r["cuerpo_extraido"]:
+            r["error_enriquecimiento"] = "cuerpo_insuficiente"
+        return r
+    except PermissionError as exc:
+        r.update({"cuerpo_extraido": False, "estado_extraccion": "bloqueado_robots", "error_enriquecimiento": str(exc)})
+    except urllib.error.HTTPError as exc:
+        r.update({"cuerpo_extraido": False, "estado_extraccion": f"http_{exc.code}", "error_enriquecimiento": str(exc)})
+    except Exception as exc:
+        r.update({"cuerpo_extraido": False, "estado_extraccion": "error_descarga", "error_enriquecimiento": f"{type(exc).__name__}: {exc}"})
     return r
 
 
-def _urls_amp(amphtml, base):
-    salida = []
-    if amphtml:
-        absoluta = urllib.parse.urljoin(base, amphtml)
-        if url_http(absoluta):
-            salida.append(absoluta)
-    host = dominio_url(base)
-    if host in {"latercera.com", "df.cl", "diariofinanciero.cl"}:
-        p = urllib.parse.urlsplit(base)
-        query = [(k, v) for k, v in urllib.parse.parse_qsl(p.query) if k != "outputType"]
-        query.append(("outputType", "amp"))
-        salida.append(urllib.parse.urlunsplit(
-            (p.scheme, p.netloc, p.path, urllib.parse.urlencode(query), "")))
-    return salida[:2]
+def texto_registro(reg: dict[str, Any]) -> str:
+    return " ".join([reg.get("titulo", ""), reg.get("resumen", ""), reg.get("texto_enriquecido", "")])[:MAX_TEXTO_ANALISIS]
 
 
-# ─────────────────────────────────────────────────────────────
-# Motor de detección UAF Chile (análisis por proximidad)
-# ─────────────────────────────────────────────────────────────
-
-RE_UAF_LARGA = re.compile(r"unidad(?:es)?\s+(?:de\s+)?analisis\s+financiero")
-RE_UAF_SIGLA = re.compile(r"\buaf\b|\bu\.\s?a\.\s?f\.?")
-RE_UIF_GENERICA = re.compile(r"unidad\s+de\s+inteligencia\s+financiera")
-
-VENTANA_ESTRECHA = 150
-VENTANA_AMPLIA = 430
-
-SENAL_CHILE_FUERTE = [
-    "de chile", "chilena", "chileno", "uaf chile", "uaf de chile", "ley 19.913",
-    "ley n 19.913", "ley no 19.913", "19.913", "uaf.cl", "santiago de chile",
-    "unidad de analisis financiero de chile",
-]
-SENAL_CHILE_CONTEXTO = [
-    "chile", "cmf", "comision para el mercado financiero", "ministerio publico",
-    "fiscalia", "fiscalia nacional", "fiscalia regional", "fiscal nacional",
-    "servicio de impuestos internos", "sii", "pdi", "policia de investigaciones",
-    "carabineros", "gafilat", "peso chileno", "pesos chilenos", "clp",
-    "unidad de fomento", "contraloria", "poder judicial", "banco central de chile",
-    "consejo de defensa del estado", "aduanas", "santiago", "valparaiso",
-    "ministerio de hacienda", "senado", "camara de diputados", "la moneda",
-]
-PAISES_EXTRANJEROS = [
-    "panama", "peru", "ecuador", "paraguay", "bolivia", "colombia", "argentina",
-    "uruguay", "brasil", "venezuela", "mexico", "guatemala", "honduras",
-    "el salvador", "costa rica", "nicaragua", "cuba", "republica dominicana",
-    "espana", "estados unidos", "italia", "francia", "portugal", "haiti",
-]
-GENTILICIOS_EXTRANJEROS = [
-    "panamena", "panameno", "peruana", "peruano", "ecuatoriana", "ecuatoriano",
-    "paraguaya", "paraguayo", "boliviana", "boliviano", "colombiana", "colombiano",
-    "argentina", "argentino", "uruguaya", "uruguayo", "brasilena", "brasileno",
-    "venezolana", "venezolano", "mexicana", "mexicano", "dominicana", "dominicano",
-    "espanola", "espanol", "estadounidense", "guatemalteca", "hondurena",
-    "salvadorena", "costarricense", "nicaraguense",
-]
-# Unidades homólogas extranjeras: si aparecen pegadas a la mención, no es la UAF de Chile.
-ORGANISMOS_EXTRANJEROS = [
-    "uafe", "uiaf", "seprelad", "sepblac", "fincen", "coaf", "senaclaft",
-    "uif peru", "uif mexico", "uif argentina", "uif bolivia", "sbs peru",
-]
-
-_UNIDAD = r"(?:unidad(?:es)?\s+(?:de\s+)?analisis\s+financiero(?:\s*\(uaf\))?|\buaf\b|\buif\b)"
-_PAISES = "|".join(re.escape(normaliza(p)) for p in PAISES_EXTRANJEROS)
-_GENT = "|".join(re.escape(normaliza(g)) for g in GENTILICIOS_EXTRANJEROS)
-
-# «UAF de Panamá», «Unidad de Análisis Financiero del Perú», «UAF panameña»,
-# «Panamá: la UAF…», «la UAF, de Ecuador,…»
-RE_CALIFICA_EXTRANJERA = re.compile(
-    rf"{_UNIDAD}\s*[,:]?\s*(?:de\s+la\s+|de\s+los\s+|de\s+|del\s+)?(?:{_PAISES})\b"
-    rf"|{_UNIDAD}\s*[,:]?\s*(?:{_GENT})\b"
-    rf"|(?:{_PAISES})\s*[:,]\s*(?:la\s+)?{_UNIDAD}"
-)
-RE_ORGANISMO_EXTRANJERO = re.compile(
-    "|".join(_patron_aguja(o) for o in ORGANISMOS_EXTRANJEROS))
-RE_PAIS_EXTRANJERO = re.compile(
-    "|".join(_patron_aguja(x) for x in (PAISES_EXTRANJEROS + GENTILICIOS_EXTRANJEROS)))
-
-CONTEXTO_LAFT_MINIMO = ENCUADRE_NUCLEO + [
-    "reporte de operaciones sospechosas", "ley 19.913", "inteligencia financiera",
-    "sujeto obligado", "sujetos obligados", "oficial de cumplimiento", "gafilat",
-    "gafi", "financiamiento del terrorismo", "debida diligencia",
-    "beneficiario final", "delitos precedentes", "prevencion de lavado",
-    "unidad de analisis financiero", "reporte ros", "entidad reportante",
-    "secreto bancario", "crimen organizado", "cuentas puente", "testaferro",
-    "transferencias fraccionadas", "operacion sospechosa", "roe", "ros",
-    "inteligencia economica", "activos de origen ilicito", "extincion de dominio",
-    "decomiso", "financiamiento ilicito", "circular 62", "ley 21.121",
-]
+def ventanas_uaf(texto: str, ancho: int = 520) -> list[str]:
+    return [texto[max(0, m.start() - ancho): min(len(texto), m.end() + ancho)] for m in MENCION_UAF_RE.finditer(texto)]
 
 
-def texto_registro(reg):
-    """Texto normalizado usado para filtrar y clasificar."""
-    partes = [
-        reg.get("titulo", ""),
-        reg.get("resumen", ""),
-        reg.get("texto_enriquecido", ""),
-        reg.get("contexto_uaf", ""),
-        reg.get("medio", ""),
-    ]
-    return normaliza(" \n ".join(str(x) for x in partes if x))
-
-
-def _menciones_uaf(texto):
-    menciones = []
-    for m in RE_UAF_LARGA.finditer(texto):
-        menciones.append((m.start(), m.end(), "larga"))
-    for m in RE_UAF_SIGLA.finditer(texto):
-        if not any(ini <= m.start() <= fin for ini, fin, _ in menciones):
-            menciones.append((m.start(), m.end(), "sigla"))
-    for m in RE_UIF_GENERICA.finditer(texto):
-        menciones.append((m.start(), m.end(), "uif"))
-    return sorted(menciones)[:60]
-
-
-def analiza_uaf(reg):
-    """Decide si la mención corresponde a la UAF de Chile.
-
-    Devuelve (es_uaf_chile, confianza, motivos, puntaje, n_menciones).
-    La decisión se toma por mención y se conserva la mejor: la presencia de un
-    país extranjero en otro párrafo ya no descarta la noticia completa.
-    """
-    texto = texto_registro(reg)
-    menciones = _menciones_uaf(texto)
-    enlaza_uaf = bool(reg.get("enlaza_uaf"))
-    hay_laft = contiene(texto, CONTEXTO_LAFT_MINIMO)
-
-    if not menciones and not (enlaza_uaf and hay_laft):
-        return False, "sin_mencion", [], 0, 0
-
-    chilena, nivel, host = clasifica_fuente(reg)
-    if not chilena and host and not reg.get("plataforma"):
-        return False, "fuente_no_chilena", ["dominio_no_chileno"], 0, len(menciones)
-    institucional = es_fuente_institucional(reg)
-    es_uaf_cl = "uaf.cl" in (host or "") or "uaf.cl" in normaliza(reg.get("link", ""))
-
-    base = 0
-    motivos = []
-    if es_uaf_cl:
-        base += 9
-        motivos.append("sitio_institucional_uaf")
-    elif institucional and chilena:
-        base += 5
-        motivos.append("fuente_institucional_chilena")
-    elif nivel == "verificada":
-        base += 4
-        motivos.append("medio_chileno_verificado")
-    elif nivel == "chilena":
-        base += 3
-        motivos.append("dominio_chileno")
-    elif nivel == "nombre":
-        base += 2
-        motivos.append("nombre_medio_chileno")
-    if enlaza_uaf:
-        base += 4
-        motivos.append("enlaza_a_uaf_cl")
-    if "19.913" in texto:
-        base += 3
-        motivos.append("ley_19913")
-    if hay_laft:
-        base += 2
-        motivos.append("contexto_laft")
-
-    mejor = -99
-    mejores_motivos = []
-    utiles = 0
-    for ini, fin, tipo in menciones:
-        estrecha = texto[max(0, ini - VENTANA_ESTRECHA):fin + VENTANA_ESTRECHA]
-        amplia = texto[max(0, ini - VENTANA_AMPLIA):fin + VENTANA_AMPLIA]
-        if tipo in {"sigla", "uif"} and not hay_laft and not contiene(estrecha, SENAL_CHILE_FUERTE):
-            continue  # «UAF» sin contexto LA/FT no es evidencia utilizable
-        utiles += 1
-        puntaje = base
-        detalle = []
-        if tipo == "larga":
-            puntaje += 2
-            detalle.append("nombre_completo")
-        elif tipo == "uif":
-            puntaje -= 1
-            detalle.append("nombre_generico_uif")
-        if contiene(estrecha, SENAL_CHILE_FUERTE):
-            puntaje += 7
-            detalle.append("chile_junto_a_la_mencion")
-        elif contiene(amplia, SENAL_CHILE_FUERTE):
-            puntaje += 4
-            detalle.append("chile_en_el_parrafo")
-        if contiene(estrecha, SENAL_CHILE_CONTEXTO):
-            puntaje += 3
-            detalle.append("institucionalidad_chilena_cercana")
-        elif contiene(amplia, SENAL_CHILE_CONTEXTO):
-            puntaje += 2
-            detalle.append("institucionalidad_chilena_en_contexto")
-        # El veto solo aplica cuando el país califica a la unidad («UAF de Panamá»)
-        # o cuando junto a la mención aparece un organismo homólogo extranjero.
-        pegado = texto[max(0, ini - 90):fin + 90]
-        if RE_CALIFICA_EXTRANJERA.search(pegado) and not contiene(pegado, SENAL_CHILE_FUERTE):
-            puntaje -= 9
-            detalle.append("unidad_extranjera_identificada")
-        elif RE_ORGANISMO_EXTRANJERO.search(pegado) and not contiene(pegado, SENAL_CHILE_FUERTE):
-            puntaje -= 4
-            detalle.append("organismo_homologo_extranjero_junto_a_la_mencion")
-        elif RE_PAIS_EXTRANJERO.search(estrecha) and not contiene(estrecha, SENAL_CHILE_CONTEXTO):
-            puntaje -= 2
-            detalle.append("pais_extranjero_sin_referencia_chilena")
-        elif RE_PAIS_EXTRANJERO.search(amplia):
-            puntaje -= 1
-            detalle.append("pais_extranjero_mencionado_en_el_texto")
-        if puntaje > mejor:
-            mejor = puntaje
-            mejores_motivos = detalle
-
-    if utiles == 0:
-        if enlaza_uaf and hay_laft:
-            mejor = base
-            mejores_motivos = ["mencion_por_enlace_institucional"]
+def analiza_uaf(reg: dict[str, Any]) -> tuple[bool, str, list[str], int, int]:
+    texto_original = texto_registro(reg)
+    texto = normaliza(texto_original)
+    menciones = list(MENCION_UAF_RE.finditer(texto))
+    if not menciones:
+        return False, "sin_mencion", ["sin mención UAF"], 0, 0
+    host = dominio_url(reg.get("link", ""))
+    fuente = fuente_para_host(host)
+    puntajes: list[tuple[int, list[str]]] = []
+    for m in menciones:
+        ventana = texto[max(0, m.start() - 520): min(len(texto), m.end() + 520)]
+        score = 0
+        motivos: list[str] = []
+        mencion = m.group(0)
+        if "unidad de analisis financiero" in mencion:
+            score += 5; motivos.append("nombre institucional")
+        elif re.fullmatch(r"u\.?a\.?f\.?", mencion):
+            score += 2; motivos.append("sigla UAF")
         else:
-            return False, "sigla_ambigua", [], 0, len(menciones)
-
-    motivos = list(dict.fromkeys(motivos + mejores_motivos))[:8]
-    if mejor >= 8:
-        return True, "alta", motivos, mejor, utiles
-    if mejor >= 6:
-        return True, "media", motivos, mejor, utiles
-    if any(("extranjer" in m or "homologo" in m) for m in mejores_motivos):
-        return False, "uaf_extranjera", motivos, mejor, utiles
-    return False, "ambigua", motivos, mejor, utiles
-
-
-def extrae_contexto_uaf(reg, radio_izq=130, radio_der=420):
-    """Fragmento legible centrado en la mención, con acentos y mayúsculas."""
-    original = " ".join(x for x in (
-        reg.get("titulo", ""), reg.get("resumen", ""), reg.get("texto_enriquecido", "")) if x)
-    if not original:
-        original = reg.get("contexto_uaf", "") or ""
-    m = re.search(r"unidad(?:es)?\s+de\s+an[aá]lisis\s+financiero|\bUAF\b", original, re.I)
-    if not m:
-        return (reg.get("contexto_uaf", "") or "")[:700]
-    ini = max(0, m.start() - radio_izq)
-    fin = min(len(original), m.end() + radio_der)
-    frag = re.sub(r"\s+", " ", original[ini:fin]).strip()
-    if ini:
-        frag = "…" + frag
-    if fin < len(original):
-        frag += "…"
-    return frag[:700]
+            score += 1
+        if fuente:
+            score += 2; motivos.append("fuente chilena catalogada")
+        if host in DOMINIOS_INSTITUCIONALES:
+            score += 2; motivos.append("fuente oficial chilena")
+        chile_hits = sum(1 for s in SENALES_CHILE if normaliza(s) in ventana)
+        laft_hits = sum(1 for s in SENALES_LAFT if normaliza(s) in ventana)
+        if chile_hits:
+            score += min(6, chile_hits * 2); motivos.append("contexto institucional chileno")
+        if laft_hits:
+            score += min(4, laft_hits); motivos.append("contexto LA/FT")
+        extranjeros = [s for s in SENALES_EXTRANJERAS if normaliza(s) in ventana]
+        if extranjeros:
+            score -= 8; motivos.append("contexto de unidad extranjera")
+        # UAF institucional se acepta incluso en noticias de actividades sin términos LA/FT.
+        if host in {"uaf.cl", "estrategiaantilavado.cl"}:
+            score += 5; motivos.append("sitio del sistema antilavado chileno")
+        puntajes.append((score, motivos))
+    mejor, motivos = max(puntajes, key=lambda x: x[0])
+    valido = mejor >= 6
+    confianza = "alta" if mejor >= 10 else "media" if valido else "baja"
+    return valido, confianza, motivos, mejor, len(menciones)
 
 
-# ─────────────────────────────────────────────────────────────
-# Clasificación temática
-# ─────────────────────────────────────────────────────────────
+def extrae_contexto_uaf(reg: dict[str, Any]) -> str:
+    texto = texto_registro(reg)
+    vs = ventanas_uaf(texto, 240)
+    if not vs:
+        return ""
+    mejor = max(vs, key=lambda v: sum(1 for s in SENALES_CHILE + SENALES_LAFT if normaliza(s) in normaliza(v)))
+    mejor = limpia_texto(mejor)
+    return ("…" if len(mejor) < len(texto) else "") + mejor[:620] + ("…" if len(mejor) > 620 else "")
 
-def clasifica_tipo_medio(reg):
-    host = ""
-    for campo in ("url_final", "link", "fuente_url"):
-        host = dominio_url(reg.get(campo, "")) if isinstance(reg, dict) else ""
-        if host and host not in AGREGADORES:
-            break
-    if host:
-        for dominio, tipo in TIPO_POR_DOMINIO.items():
-            if host == dominio or host.endswith("." + dominio):
-                return tipo
-        if dominio_institucional(host):
-            return "institucional"
-    texto = normaliza(reg.get("medio", "") if isinstance(reg, dict) else reg)
-    for clave, agujas in TIPOS_MEDIO.items():
-        if contiene(texto, agujas):
+
+def origen_mencion_uaf(reg: dict[str, Any], es_uaf: bool) -> str:
+    if not es_uaf:
+        return "sin_mencion"
+    if MENCION_UAF_RE.search(reg.get("titulo", "")):
+        return "titulo"
+    if MENCION_UAF_RE.search(reg.get("resumen", "")):
+        return "bajada"
+    if MENCION_UAF_RE.search(reg.get("texto_enriquecido", "")):
+        return "cuerpo"
+    return "texto"
+
+
+def es_pertinente(reg: dict[str, Any]) -> bool:
+    uaf = analiza_uaf(reg)[0]
+    if uaf:
+        return True
+    texto = normaliza(texto_registro(reg))
+    hits_laft = sum(1 for s in SENALES_LAFT if normaliza(s) in texto)
+    hits_crimen = sum(1 for s in SENALES_TEMATICAS if normaliza(s) in texto)
+    return hits_laft >= 1 and hits_crimen >= 2
+
+
+def clasifica_naturaleza(reg: dict[str, Any], texto: str) -> str:
+    url = normaliza(reg.get("link", ""))
+    combinado = texto + " " + url
+    for clave in ("opinion", "institucional", "legislativo", "regulatorio", "judicial", "policial", "analisis"):
+        if contiene(combinado, NATURALEZAS[clave]):
             return clave
-    return "otro"
+    return "analisis"
 
 
-def clasifica_sujetos_obligados(texto):
-    sectores = claves_presentes(texto, SUJETOS_OBLIGADOS)
-    impactos = claves_presentes(texto, IMPACTO_SUJETO) if sectores else []
-    return sectores, impactos
-
-
-def clasifica_roles_sujetos(texto, sectores):
-    if not sectores:
-        return {}
-    frases = [f.strip() for f in re.split(r"[.!?;\n]+", texto) if f.strip()]
-    roles = {}
-    for sector in sectores:
-        agujas = SUJETOS_OBLIGADOS.get(sector, [])
-        contexto = " ".join(f for f in frases if contiene(f, agujas))
-        if contiene(contexto, ["victima", "afectado", "sustrajeron", "robaron a", "robo a",
-                               "robar a", "resulto victima", "hackearon la cuenta",
-                               "suplantacion", "fue defraudad"]):
-            rol = "victima"
-        elif contiene(contexto, ["utilizo", "utilizaron", "a traves de", "cuentas puente",
-                                 "transferencias", "retiros", "introducirlo al sistema",
-                                 "compraron", "compro", "adquirieron", "canalizo",
-                                 "triangul", "fraccion"]):
-            rol = "canal"
-        elif contiene(contexto, ["imputad", "formaliz", "investigad", "querella", "condenad",
-                                 "allanad", "sancionad", "multad"]):
-            rol = "investigado"
-        elif contiene(contexto, ["circular", "normativa", "fiscalizacion", "supervision",
-                                 "debida diligencia", "obligacion", "sancion", "instructivo"]):
-            rol = "regulado"
-        else:
-            rol = "mencionado"
-        roles[sector] = rol
-    return roles
-
-
-def clasifica(reg):
-    texto = texto_registro(reg)
-
-    fenomeno = "otro"
-    for clave, agujas in FENOMENOS.items():
-        if contiene(texto, agujas):
-            fenomeno = clave
-            break
-
-    naturaleza = "analisis"
-    for clave, agujas in NATURALEZAS.items():
-        if contiene(texto, agujas):
-            naturaleza = clave
-            break
-
-    precedentes = claves_presentes(texto, PRECEDENTES) or ["indeterminado"]
-    topicos = claves_presentes(texto, TOPICOS) or ["otros"]
-
-    uaf_chile, confianza, motivos, puntaje, menciones = analiza_uaf(reg)
-    sujetos, impactos = clasifica_sujetos_obligados(texto)
-    roles = clasifica_roles_sujetos(texto, sujetos)
+def clasifica(reg: dict[str, Any]) -> dict[str, Any]:
+    texto = normaliza(texto_registro(reg))
+    uaf, confianza, motivos, puntaje, menciones = analiza_uaf(reg)
+    fenomeno = next((k for k, v in FENOMENOS.items() if contiene(texto, v)), "otro")
+    naturaleza = clasifica_naturaleza(reg, texto)
+    precedentes = [k for k, v in PRECEDENTES.items() if contiene(texto, v)] or ["indeterminado"]
+    topicos = [k for k, v in TOPICOS.items() if contiene(texto, v)] or ["otros"]
+    sujetos = [k for k, v in SUJETOS.items() if contiene(texto, v)]
     if sujetos and "sujetos_obligados" not in topicos:
         topicos.append("sujetos_obligados")
-    if sujetos and "vulneracion_la" in impactos and "vulneracion_sectorial" not in topicos:
-        topicos.append("vulneracion_sectorial")
-
-    _, nivel_fuente, _ = clasifica_fuente(reg)
-
-    reg["fenomeno"] = fenomeno
-    reg["naturaleza"] = naturaleza
-    reg["precedentes"] = precedentes
-    reg["topicos"] = topicos
-    reg["tipo_medio"] = clasifica_tipo_medio(reg)
-    reg["uaf"] = uaf_chile
-    reg["uaf_chile"] = uaf_chile
-    reg["uaf_confianza"] = confianza
-    reg["uaf_motivos"] = motivos
-    reg["uaf_puntaje"] = puntaje
-    reg["uaf_menciones"] = menciones
-    reg["contexto_uaf"] = extrae_contexto_uaf(reg) if uaf_chile else ""
-    reg["sujetos_obligados"] = sujetos
-    reg["impactos_sujeto"] = impactos
-    reg["roles_sujetos"] = roles
-    reg["roles_sujetos_label"] = {k: ROL_SUJETO_ETIQUETA.get(v, v) for k, v in roles.items()}
-    reg["nucleo"] = contiene(texto, ENCUADRE_NUCLEO)
-    reg["nivel_fuente"] = nivel_fuente
-    reg["nivel_fuente_label"] = NIVEL_FUENTE_ETIQUETA.get(nivel_fuente, "")
+    impactos: list[str] = []
+    if sujetos:
+        if contiene(texto, ["fiscalizacion", "circular", "regulacion", "obligacion", "sancion"]):
+            impactos.append("regulacion_supervision")
+        if contiene(texto, ["lavado", "utilizado", "canalizo", "testaferro", "cuenta puente"]):
+            impactos.append("vulneracion_la")
+        if contiene(texto, ["cumplimiento", "debida diligencia", "prevencion"]):
+            impactos.append("cumplimiento_preventivo")
+    fuente = fuente_para_host(dominio_url(reg.get("link", ""))) or {}
+    roles = {s: ("regulado" if "regulacion_supervision" in impactos else "vulnerado" if "vulneracion_la" in impactos else "mencionado") for s in sujetos}
+    reg.update({
+        "fenomeno": fenomeno,
+        "fenomeno_label": LABELS["fenomeno"].get(fenomeno, fenomeno),
+        "naturaleza": naturaleza,
+        "naturaleza_label": LABELS["naturaleza"].get(naturaleza, naturaleza),
+        "precedentes": precedentes,
+        "precedentes_label": [LABELS["precedentes"].get(x, x) for x in precedentes],
+        "topicos": topicos,
+        "topicos_label": [LABELS["topicos"].get(x, x) for x in topicos],
+        "sujetos_obligados": sujetos,
+        "sujetos_obligados_label": [LABELS["sujetos"].get(x, x) for x in sujetos],
+        "impactos_sujeto": impactos,
+        "impactos_sujeto_label": [{"regulacion_supervision": "Regulación o supervisión", "vulneracion_la": "Vulneración para LA", "cumplimiento_preventivo": "Cumplimiento preventivo"}.get(x, x) for x in impactos],
+        "roles_sujetos": roles,
+        "roles_sujetos_label": {k: v.capitalize() for k, v in roles.items()},
+        "tipo_medio": fuente.get("tipo", reg.get("tipo_fuente", "otro")),
+        "uaf": uaf,
+        "uaf_chile": uaf,
+        "uaf_confianza": confianza,
+        "uaf_motivos": motivos,
+        "uaf_puntaje": puntaje,
+        "uaf_menciones": menciones,
+        "origen_mencion_uaf": origen_mencion_uaf(reg, uaf),
+        "contexto_uaf": extrae_contexto_uaf(reg) if uaf else "",
+        "nucleo": uaf or contiene(texto, SENALES_LAFT),
+        "fuente_institucional": bool(fuente.get("oficial", reg.get("fuente_institucional"))),
+        "nivel_fuente": "institucional" if fuente.get("oficial") else "catalogada",
+        "nivel_fuente_label": "Fuente institucional" if fuente.get("oficial") else "Medio catalogado",
+    })
     return reg
 
 
-DOMINIO_LAFT = ENCUADRE_NUCLEO + [
-    "crimen organizado", "gafilat", "gafi", "delitos economicos",
-    "financiamiento del terrorismo", "sartor", "tren de aragua",
-    "reporte de operaciones sospechosas", "delitos precedentes", "secreto bancario",
-    "beneficiario final", "debida diligencia", "persona expuesta politicamente",
-    "unidad de analisis financiero", "inteligencia financiera", "testaferro",
-    "cuentas puente", "sociedades de papel", "empresas de papel",
-]
+# ---------------------------------------------------------------------------
+# Estado, histórico y auditoría
+# ---------------------------------------------------------------------------
 
 
-SENAL_PATRIMONIAL = [
-    "dinero", "millones", "cuentas", "cuenta bancaria", "transferencia",
-    "transferencias", "bienes", "patrimonio", "incaut", "decomis", "comiso",
-    "activos", "fondos", "efectivo", "criptomoneda", "criptoactivo",
-    "propiedades", "inmuebles", "vehiculos", "sociedades", "empresas",
-    "facturas", "boletas", "utilidades", "pagos", "remesas", "divisas",
-    "extincion de dominio", "utilidad ilicita", "ganancias",
-]
-PRECEDENTES_TODOS = [t for lista in PRECEDENTES.values() for t in lista]
-
-
-def es_pertinente(reg):
-    """Descarta ruido y menciones a UAF extranjeras sin conexión chilena."""
-    texto = texto_registro(reg)
-    uaf_chile, estado, _, _, _ = analiza_uaf(reg)
-    if uaf_chile:
-        return True
-    if estado in {"uaf_extranjera", "ambigua"} and not contiene(texto, DOMINIO_LAFT):
-        return False
-    if estado == "uaf_extranjera":
-        # Nota extranjera: solo se conserva si además desarrolla el dominio LA/FT chileno.
-        if not contiene(texto, ["chile", "chilena", "chileno"]):
-            return False
-    if reg.get("fuente_institucional") and contiene(texto, CONTEXTO_LAFT_MINIMO):
-        return True
-    sectores, impactos = clasifica_sujetos_obligados(texto)
-    sujeto_relevante = bool(sectores and impactos and contiene(texto, DOMINIO_LAFT + [
-        "oficial de cumplimiento", "sujeto obligado", "entidad reportante",
-    ]))
-    # Un delito precedente con dimensión patrimonial es materia de interés para
-    # el monitor aunque el texto no use la expresión «lavado de activos».
-    precedente_patrimonial = (contiene(texto, PRECEDENTES_TODOS)
-                              and contiene(texto, SENAL_PATRIMONIAL))
-    return (contiene(texto, DOMINIO_LAFT) or sujeto_relevante or precedente_patrimonial)
-
-
-# ─────────────────────────────────────────────────────────────
-# Lectura de feeds RSS/Atom y sitemaps
-# ─────────────────────────────────────────────────────────────
-
-def _xml_local(tag):
-    return str(tag).rsplit("}", 1)[-1].lower()
-
-
-def _texto_hijo(nodo, nombres):
-    for hijo in nodo.iter():
-        if _xml_local(hijo.tag) in nombres:
-            if hijo.text and hijo.text.strip():
-                return hijo.text.strip()
-    return ""
-
-
-def _enlace_item(nodo):
-    # RSS: <link>texto</link> · Atom: <link rel="alternate" href="...">
-    for hijo in nodo.iter():
-        if _xml_local(hijo.tag) != "link":
-            continue
-        href = hijo.get("href")
-        rel = (hijo.get("rel") or "alternate").lower()
-        if href and rel in {"alternate", ""}:
-            return href.strip()
-        if hijo.text and hijo.text.strip():
-            return hijo.text.strip()
-    guid = _texto_hijo(nodo, {"guid", "id"})
-    return guid if url_http(guid) else ""
-
-
-def _decodifica_enlace_google(url):
-    """Intenta recuperar la URL del medio dentro de un enlace de Google News."""
-    if "news.google.com" not in (url or ""):
-        return ""
-    m = re.search(r"/(?:rss/)?articles/([A-Za-z0-9_\-]{20,})", url)
-    if not m:
-        return ""
-    bruto = m.group(1)
-    for variante in (bruto, bruto + "=", bruto + "==", bruto + "==="):
-        try:
-            crudo = base64.urlsafe_b64decode(variante)
-        except Exception:
-            continue
-        hallado = re.search(rb"https?://[\w./\-%~?=&+#,;:@!$'()*]{12,}", crudo)
-        if hallado:
-            candidato = hallado.group(0).decode("utf-8", "ignore")
-            candidato = candidato.split("\x01")[0].rstrip("\x00")
-            if url_http(candidato) and dominio_url(candidato) not in AGREGADORES:
-                return candidato
-    return ""
-
-
-def lee_feed(url, origen, medio_defecto="", fuente_url=""):
-    """Lee un feed RSS o Atom y devuelve registros crudos."""
-    salida = []
+def carga_json(ruta: Path, defecto: Any) -> Any:
     try:
-        contenido, final, headers = descarga(
-            url, accept="application/rss+xml, application/atom+xml, application/xml, text/xml, */*")
-        raiz = xml_seguro(contenido)
-    except Exception as e:
-        log(f"  ! feed {origen} ({dominio_url(url) or url[:40]}): {type(e).__name__}: {e}")
-        return salida
-
-    for nodo in raiz.iter():
-        if _xml_local(nodo.tag) not in {"item", "entry"}:
-            continue
-        titulo = limpia_html(_texto_hijo(nodo, {"title"}))
-        enlace = _enlace_item(nodo)
-        if not titulo or not enlace:
-            continue
-        medio = medio_defecto
-        fuente = fuente_url
-        for hijo in nodo.iter():
-            if _xml_local(hijo.tag) == "source":
-                if hijo.text and hijo.text.strip():
-                    medio = hijo.text.strip()
-                if hijo.get("url"):
-                    fuente = hijo.get("url").strip()
-                break
-        if not medio and " - " in titulo:
-            titulo, medio = titulo.rsplit(" - ", 1)
-        resumen = limpia_html(_texto_hijo(nodo, {"description", "summary", "encoded", "content"}))
-        fecha = (parsea_fecha_flexible(_texto_hijo(nodo, {"pubdate", "published", "updated", "date"})))
-
-        real = _decodifica_enlace_google(enlace) or enlace
-        if not url_http(real):
-            continue
-        registro = {
-            "titulo": titulo.strip()[:500],
-            "link": real,
-            "medio": (medio or medio_defecto or origen).strip()[:160],
-            "resumen": resumen[:700],
-            "fecha_dt": fecha,
-            "origen": origen,
-            "fuente_url": fuente or (f"https://{dominio_url(real)}" if dominio_url(real) else ""),
-        }
-        if not registro["fuente_url"] and medio_defecto:
-            registro["fuente_url"] = fuente_url
-        salida.append(registro)
-    return salida
-
-
-def _valida_endpoint(url):
-    """Comprueba que la URL entregue un feed o sitemap utilizable."""
-    try:
-        contenido, _, _ = descarga(url, accept="application/xml,text/xml,application/rss+xml,*/*",
-                                  max_bytes=1_500_000, reintentos=1)
-        raiz = xml_seguro(contenido)
+        return json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else copy.deepcopy(defecto)
     except Exception:
-        return ""
-    tipo = _xml_local(raiz.tag)
-    if tipo in {"rss", "feed", "rdf"}:
-        return "feed"
-    if tipo in {"urlset", "sitemapindex"}:
-        return "sitemap"
-    return ""
-
-
-def descubre_endpoints(host, estado, limite_pruebas=8):
-    """Descubre feeds y news-sitemaps de un dominio y los guarda en el estado."""
-    cache = estado.setdefault("endpoints", {})
-    guardado = cache.get(host)
-    ahora = time.time()
-    if guardado and (ahora - guardado.get("ts", 0)) < TTL_ENDPOINTS_HORAS * 3600:
-        return guardado
-
-    candidatos_feed, candidatos_sitemap = [], []
-    semilla = SEMILLAS_ENDPOINTS.get(host, {})
-    candidatos_feed += semilla.get("feeds", [])
-    candidatos_sitemap += semilla.get("sitemaps", [])
-
-    raiz = f"https://www.{host}" if host.count(".") == 1 else f"https://{host}"
-    # 1) robots.txt declara los sitemaps
-    try:
-        datos, _, headers = descarga(f"https://{host}/robots.txt", accept="text/plain",
-                                     max_bytes=400_000, robots=False, reintentos=1)
-        for linea in _decodifica(datos, headers).splitlines():
-            if linea.lower().startswith("sitemap:"):
-                url = linea.split(":", 1)[1].strip()
-                if url_http(url):
-                    peso = 0 if re.search(r"news|noticia", url, re.I) else 1
-                    candidatos_sitemap.append((peso, url))
-    except Exception:
-        pass
-    semillas_sitemap = [c for c in candidatos_sitemap if not isinstance(c, tuple)]
-    ordenados = sorted([c for c in candidatos_sitemap if isinstance(c, tuple)])
-    candidatos_sitemap = semillas_sitemap + [u for _, u in ordenados]
-
-    # 2) portada declara feeds RSS/Atom
-    try:
-        contenido, final, headers = descarga(raiz, max_bytes=1_500_000, reintentos=1)
-        datos = extrae_articulo(contenido, final, headers)
-        for href in datos.get("feeds", [])[:6]:
-            absoluta = urllib.parse.urljoin(final, href)
-            if url_http(absoluta):
-                candidatos_feed.append(absoluta)
-    except Exception:
-        pass
-
-    # 3) rutas habituales
-    candidatos_feed += [raiz + ruta for ruta in RUTAS_FEED]
-    candidatos_sitemap += [raiz + ruta for ruta in RUTAS_SITEMAP]
-
-    feeds, sitemaps = [], []
-    pruebas = 0
-    for url in list(dict.fromkeys(candidatos_feed)):
-        if len(feeds) >= 2 or pruebas >= limite_pruebas or tiempo_agotado(reserva=180):
-            break
-        pruebas += 1
-        if _valida_endpoint(url) == "feed":
-            feeds.append(url)
-    pruebas = 0
-    for url in list(dict.fromkeys(candidatos_sitemap)):
-        if len(sitemaps) >= 2 or pruebas >= limite_pruebas or tiempo_agotado(reserva=180):
-            break
-        pruebas += 1
-        if _valida_endpoint(url) == "sitemap":
-            sitemaps.append(url)
-
-    registro = {"feeds": feeds, "sitemaps": sitemaps, "ts": ahora}
-    cache[host] = registro
-    if feeds or sitemaps:
-        log(f"  · fuentes de {host}: {len(feeds)} feed(s), {len(sitemaps)} sitemap(s)")
-    return registro
-
-
-def lee_sitemap(url, medio, host, corte, presupuesto, profundidad=0):
-    """Lee un sitemap o índice y devuelve entradas recientes del dominio."""
-    if profundidad > 2 or presupuesto[0] <= 0 or tiempo_agotado(reserva=120):
-        return []
-    presupuesto[0] -= 1
-    try:
-        contenido, _, _ = descarga(url, accept="application/xml,text/xml,*/*",
-                                   max_bytes=6_000_000, reintentos=1)
-        raiz = xml_seguro(contenido)
-    except Exception as e:
-        log(f"  ! sitemap {medio}: {type(e).__name__}")
-        return []
-
-    if _xml_local(raiz.tag) == "sitemapindex":
-        hijos = []
-        for nodo in list(raiz):
-            loc = _texto_hijo(nodo, {"loc"})
-            lastmod = parsea_fecha_flexible(_texto_hijo(nodo, {"lastmod"}))
-            if not loc:
-                continue
-            if lastmod and lastmod < corte - timedelta(days=2):
-                continue
-            hijos.append((lastmod or datetime.now(TZ_CL), loc))
-        hijos.sort(reverse=True)
-        salida = []
-        for _, loc in hijos[:4]:
-            salida.extend(lee_sitemap(loc, medio, host, corte, presupuesto, profundidad + 1))
-        return salida
-
-    salida = []
-    for nodo in list(raiz):
-        if _xml_local(nodo.tag) != "url":
-            continue
-        loc = _texto_hijo(nodo, {"loc"})
-        if not loc or not url_http(loc):
-            continue
-        if not nivel_dominio_chileno(dominio_url(loc)):
-            continue
-        titulo = _texto_hijo(nodo, {"title"})
-        fecha = (parsea_fecha_flexible(_texto_hijo(nodo, {"publication_date"}))
-                 or parsea_fecha_flexible(_texto_hijo(nodo, {"lastmod"})))
-        if fecha and fecha < corte:
-            continue
-        if not titulo:
-            partes = [p for p in urllib.parse.urlsplit(loc).path.split("/") if p]
-            titulo = urllib.parse.unquote(partes[-1] if partes else "").replace("-", " ")[:300]
-        salida.append({
-            "titulo": limpia_html(titulo)[:500],
-            "link": loc,
-            "medio": medio,
-            "resumen": "",
-            "fecha_dt": fecha,
-            "origen": "Sitemap de prensa chilena",
-            "fuente_url": f"https://{host}",
-            "origen_busqueda": "sitemap",
-        })
-    return salida
-
-
-# ─────────────────────────────────────────────────────────────
-# Canales de descubrimiento
-# ─────────────────────────────────────────────────────────────
-
-def en_paralelo(tareas, etiqueta="canal", hilos=None):
-    """Ejecuta tareas sin argumentos que devuelven listas y concatena resultados."""
-    salida = []
-    if not tareas:
-        return salida
-    with ThreadPoolExecutor(max_workers=hilos or HILOS) as pool:
-        futuros = [pool.submit(t) for t in tareas]
-        for fut in as_completed(futuros):
-            try:
-                salida.extend(fut.result() or [])
-            except Exception as e:  # noqa: BLE001
-                log(f"  ! {etiqueta}: {type(e).__name__}")
-    return salida
-
-
-def recolecta_google_news():
-    def tarea(q):
-        def _ejecuta():
-            if tiempo_agotado(reserva=260):
-                return []
-            consulta = f"{q} when:{min(VENTANA_DIAS, 30)}d"
-            url = ("https://news.google.com/rss/search?q=" + urllib.parse.quote(consulta)
-                   + "&hl=es-419&gl=CL&ceid=CL:es-419")
-            hallazgos = lee_feed(url, "Google News")
-            for r in hallazgos:
-                r["origen_busqueda"] = f"google:{q}"[:180]
-            return hallazgos
-        return _ejecuta
-
-    salida = en_paralelo([tarea(q) for q in CONSULTAS_PRENSA], "Google News")
-    log(f"  · Google News → {len(salida)} resultados brutos "
-        f"({len(CONSULTAS_PRENSA)} consultas, {len(DOMINIOS_BUSQUEDA_SITIO)} dirigidas por medio)")
-    return salida
-
-
-def recolecta_bing_news():
-    def tarea(q):
-        def _ejecuta():
-            if tiempo_agotado(reserva=240):
-                return []
-            url = ("https://www.bing.com/news/search?q=" + urllib.parse.quote(q)
-                   + "&format=RSS&setmkt=es-CL&setlang=es")
-            hallazgos = lee_feed(url, "Bing News")
-            for r in hallazgos:
-                r["origen_busqueda"] = f"bing:{q}"[:180]
-            return hallazgos
-        return _ejecuta
-
-    salida = en_paralelo([tarea(q) for q in CONSULTAS_BING], "Bing News")
-    log(f"  · Bing News → {len(salida)} resultados brutos")
-    return salida
-
-
-def recolecta_gdelt():
-    """GDELT DOC 2.0: índice global de noticias, sin API key."""
-    salida = []
-    for q in CONSULTAS_GDELT:
-        if tiempo_agotado(reserva=260):
-            break
-        consulta = f"{q} sourcelang:spanish"
-        url = ("https://api.gdeltproject.org/api/v2/doc/doc?query="
-               + urllib.parse.quote(consulta)
-               + "&mode=artlist&maxrecords=200&sort=datedesc&format=json"
-               + f"&timespan={min(VENTANA_DIAS, 30)}d")
-        try:
-            contenido, _, headers = descarga(url, accept="application/json,*/*",
-                                            max_bytes=3_000_000, robots=False, reintentos=1)
-            datos = json_seguro(contenido, headers)
-        except Exception as e:
-            log(f"  ! GDELT «{q[:40]}»: {type(e).__name__}")
-            continue
-        for art in (datos.get("articles") or []):
-            enlace = str(art.get("url", ""))
-            if not url_http(enlace):
-                continue
-            host = dominio_url(enlace)
-            if not nivel_dominio_chileno(host):
-                continue
-            salida.append({
-                "titulo": limpia_html(art.get("title", ""))[:500],
-                "link": enlace,
-                "medio": NOMBRE_POR_DOMINIO.get(host, art.get("domain", host)),
-                "resumen": "",
-                "fecha_dt": parsea_fecha_flexible(art.get("seendate", "")),
-                "origen": "GDELT",
-                "fuente_url": f"https://{host}",
-                "origen_busqueda": f"gdelt:{q}"[:180],
-            })
-    log(f"  · GDELT → {len(salida)} artículos chilenos")
-    return salida
-
-
-CLAVE_PERPLEXITY = os.getenv("PERPLEXITY_API_KEY", "").strip()
-MODELO_PERPLEXITY = os.getenv("PERPLEXITY_MODELO", "sonar").strip() or "sonar"
-CONSULTAS_PERPLEXITY = [
-    "Noticias publicadas en los últimos 7 días por medios de prensa chilenos que "
-    "mencionen a la Unidad de Análisis Financiero (UAF) de Chile. Entrega solo "
-    "los enlaces de las notas.",
-    "Noticias de los últimos 7 días en medios chilenos sobre lavado de activos, "
-    "financiamiento del terrorismo u operaciones sospechosas en Chile. Entrega "
-    "solo los enlaces de las notas.",
-]
-
-
-def recolecta_perplexity():
-    """Búsqueda sintética opcional. Requiere PERPLEXITY_API_KEY (servicio de pago).
-
-    Del resultado se usan **solo las URL citadas**: el titular, la fecha y la
-    mención a la UAF se verifican después descargando el artículo con el mismo
-    extractor que el resto del monitor. Nada de lo que afirme el modelo entra al
-    dashboard sin comprobarse contra la fuente.
-    """
-    if not CLAVE_PERPLEXITY:
-        return []
-    salida = []
-    for consulta in CONSULTAS_PERPLEXITY:
-        if tiempo_agotado(reserva=200):
-            break
-        payload = json.dumps({
-            "model": MODELO_PERPLEXITY,
-            "messages": [{"role": "user", "content": consulta}],
-            "search_domain_filter": DOMINIOS_PRIORITARIOS[:10],
-            "search_recency_filter": "week",
-            "max_tokens": 400,
-        }).encode("utf-8")
-        try:
-            contenido, _, headers = descarga(
-                "https://api.perplexity.ai/chat/completions", accept="application/json",
-                max_bytes=2_000_000, robots=False, reintentos=1, cuerpo=payload,
-                cabeceras={"Authorization": f"Bearer {CLAVE_PERPLEXITY}",
-                           "Content-Type": "application/json"})
-            datos = json_seguro(contenido, headers)
-        except Exception as e:  # noqa: BLE001
-            log(f"  ! Perplexity: {type(e).__name__}")
-            continue
-        citas = datos.get("citations") or datos.get("search_results") or []
-        for cita in citas:
-            url = cita.get("url") if isinstance(cita, dict) else cita
-            if not url_http(str(url or "")):
-                continue
-            host = dominio_url(url)
-            if not nivel_dominio_chileno(host):
-                continue
-            salida.append({
-                "titulo": (cita.get("title") if isinstance(cita, dict) else "") or "Por verificar",
-                "link": str(url),
-                "medio": NOMBRE_POR_DOMINIO.get(host, host),
-                "resumen": "",
-                "fecha_dt": None,
-                "origen": "Perplexity",
-                "fuente_url": f"https://{host}",
-                "origen_busqueda": "perplexity",
-            })
-    if salida:
-        log(f"  · Perplexity → {len(salida)} enlaces chilenos por verificar")
-    return salida
-
-
-def recolecta_feeds_medios(estado):
-    """Lee los feeds propios de cada medio chileno (autodescubiertos)."""
-    salida = []
-    hosts = [h for _, h, tipo, _ in MEDIOS_CHILE if tipo != "institucional"]
-    hosts += sorted(DOMINIOS_INSTITUCIONALES)
-    pendientes = [h for h in hosts
-                  if (time.time() - estado.get("endpoints", {}).get(h, {}).get("ts", 0))
-                  >= TTL_ENDPOINTS_HORAS * 3600]
-    # Descubrimiento progresivo: unos pocos dominios nuevos por corrida.
-    rotacion = int(estado.get("rotacion_descubrimiento", 0))
-    cupo = _env_int("MONITOR_DESCUBRE_POR_CORRIDA", 14)
-    if pendientes:
-        seleccion = list(dict.fromkeys(
-            pendientes[(rotacion + i) % len(pendientes)] for i in range(min(cupo, len(pendientes)))))
-        resultados = {}
-        lock = threading.Lock()
-
-        def descubre(host):
-            if tiempo_agotado(reserva=200):
-                return []
-            local = dict(estado)
-            local["endpoints"] = {}
-            info = descubre_endpoints(host, local)
-            with lock:
-                resultados[host] = info
-            return []
-
-        en_paralelo([lambda h=h: descubre(h) for h in seleccion], "descubrimiento")
-        estado.setdefault("endpoints", {}).update(resultados)
-        estado["rotacion_descubrimiento"] = rotacion + cupo
-
-    tareas = []
-    for host in hosts:
-        info = estado.get("endpoints", {}).get(host) or {}
-        for feed in (info.get("feeds") or [])[:2]:
-            def tarea(feed=feed, host=host):
-                if tiempo_agotado(reserva=170):
-                    return []
-                medio = NOMBRE_POR_DOMINIO.get(host, host)
-                hallazgos = lee_feed(feed, f"Feed {medio}", medio, f"https://{host}")
-                for r in hallazgos:
-                    r["origen_busqueda"] = f"feed:{host}"
-                return hallazgos
-            tareas.append(tarea)
-    salida = en_paralelo(tareas, "feeds de medios")
-    con_feed = sum(1 for h in hosts if (estado.get("endpoints", {}).get(h) or {}).get("feeds"))
-    log(f"  · Feeds propios de medios → {len(salida)} entradas "
-        f"({con_feed}/{len(hosts)} dominios con feed detectado)")
-    return salida
-
-
-def recolecta_sitemaps(estado):
-    corte = datetime.now(TZ_CL) - timedelta(days=3)
-    tareas = []
-    for host in DOMINIOS_BUSQUEDA_SITIO:
-        info = estado.get("endpoints", {}).get(host) or {}
-        sitemaps = info.get("sitemaps") or SEMILLAS_ENDPOINTS.get(host, {}).get("sitemaps", [])
-        for url in sitemaps[:1]:
-            def tarea(url=url, host=host):
-                if tiempo_agotado(reserva=170):
-                    return []
-                medio = NOMBRE_POR_DOMINIO.get(host, host)
-                return lee_sitemap(url, medio, host, corte, [8])
-            tareas.append(tarea)
-    salida = en_paralelo(tareas, "news-sitemaps")
-    log(f"  · News-sitemaps → {len(salida)} artículos recientes ({len(tareas)} sitemaps leídos)")
-    return salida
-
-
-def recolecta_uaf_oficial():
-    """Noticias publicadas por la propia UAF (uaf.cl)."""
-    enlaces = {}
-    for pagina in (1, 2):
-        url_lista = (f"https://www.uaf.cl/es-cl/noticias-lista?end_date=&page={pagina}"
-                     "&search=&start_date=")
-        try:
-            contenido, final, headers = descarga(url_lista)
-            texto_html = _decodifica(contenido, headers)
-        except Exception as e:
-            log(f"  ! uaf.cl página {pagina}: {type(e).__name__}")
-            continue
-        patron = re.compile(
-            r'<a[^>]+href=["\']([^"\']*noticia-detalle[^"\']*)["\'][^>]*>(.*?)</a>', re.I | re.S)
-        for href, interior in patron.findall(texto_html):
-            link = urllib.parse.urljoin(final, html_mod.unescape(href))
-            if not url_http(link):
-                continue
-            texto = limpia_html(interior)
-            if link not in enlaces or len(texto) > len(enlaces[link]):
-                enlaces[link] = texto
-    salida = []
-    for link, titulo in list(enlaces.items())[:36]:
-        salida.append({
-            "titulo": titulo[:500] or "Noticia UAF",
-            "link": link,
-            "medio": "Unidad de Análisis Financiero",
-            "resumen": "",
-            "fecha_dt": None,
-            "origen": "UAF Chile",
-            "fuente_url": "https://www.uaf.cl",
-            "fuente_institucional": True,
-            "origen_busqueda": "uaf_directo",
-        })
-    log(f"  · uaf.cl → {len(salida)} noticias institucionales")
-    return salida
-
-
-def recolecta_bluesky():
-    crudos = []
-    for q in CONSULTAS_SOCIALES:
-        if tiempo_agotado(reserva=120):
-            break
-        url = ("https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?limit=50&q="
-               + urllib.parse.quote(q))
-        try:
-            contenido, _, headers = descarga(url, accept="application/json,*/*",
-                                            max_bytes=2_000_000, robots=False, reintentos=1)
-            datos = json_seguro(contenido, headers)
-        except Exception as e:
-            log(f"  ! Bluesky «{q}»: {type(e).__name__}")
-            continue
-        for p in datos.get("posts", []):
-            rec = p.get("record", {})
-            autor = p.get("author", {})
-            handle = autor.get("handle", "")
-            rkey = str(p.get("uri", "")).rsplit("/", 1)[-1]
-            crudos.append({
-                "titulo": limpia_html(rec.get("text", ""))[:280],
-                "link": f"https://bsky.app/profile/{handle}/post/{rkey}" if rkey and handle else "",
-                "medio": f"@{handle}",
-                "resumen": "",
-                "fecha_dt": parsea_fecha_flexible(rec.get("createdAt", "")),
-                "origen": "Bluesky",
-                "plataforma": "bluesky",
-                "interacciones": (int(p.get("likeCount", 0) or 0) + int(p.get("repostCount", 0) or 0)
-                                  + int(p.get("replyCount", 0) or 0)),
-            })
-    return crudos
-
-
-def recolecta_reddit():
-    crudos = []
-    for sub in SUBREDDITS:
-        for q in CONSULTAS_SOCIALES:
-            if tiempo_agotado(reserva=110):
-                break
-            url = (f"https://www.reddit.com/r/{sub}/search.json?q=" + urllib.parse.quote(q)
-                   + "&restrict_sr=1&sort=new&t=month&limit=50&raw_json=1")
-            try:
-                contenido, _, headers = descarga(url, accept="application/json,*/*",
-                                                max_bytes=2_000_000, robots=False, reintentos=1)
-                datos = json_seguro(contenido, headers)
-            except Exception as e:
-                log(f"  ! Reddit r/{sub}: {type(e).__name__}")
-                continue
-            for h in datos.get("data", {}).get("children", []):
-                d = h.get("data", {})
-                creado = d.get("created_utc")
-                fecha = (datetime.fromtimestamp(creado, tz=timezone.utc).astimezone(TZ_CL)
-                         if creado else None)
-                permalink = d.get("permalink", "")
-                crudos.append({
-                    "titulo": limpia_html(d.get("title", ""))[:280],
-                    "link": ("https://www.reddit.com" + permalink) if permalink else d.get("url", ""),
-                    "medio": f"r/{sub}",
-                    "resumen": limpia_html(d.get("selftext", ""))[:600],
-                    "fecha_dt": fecha,
-                    "origen": "Reddit",
-                    "plataforma": "reddit",
-                    "interacciones": int(d.get("score", 0) or 0) + int(d.get("num_comments", 0) or 0),
-                    "autor": d.get("author", ""),
-                })
-    return crudos
-
-
-def recolecta_social():
-    return recolecta_reddit() + recolecta_bluesky()
-
-
-# ─────────────────────────────────────────────────────────────
-# Orquestación de prensa: selección, barrido y enriquecimiento
-# ─────────────────────────────────────────────────────────────
-
-PESOS_CANDIDATO = (
-    (["unidad de analisis financiero", "uaf"], 14),
-    (["lavado de activos", "lavado de dinero", "blanqueo", "operaciones sospechosas",
-      "financiamiento del terrorismo", "gafilat", "sujeto obligado",
-      "oficial de cumplimiento", "beneficiario final"], 10),
-    (["tren de aragua", "crimen organizado", "testaferro", "cuentas puente",
-      "formaliz", "imputad", "fraude", "estafa", "extorsion", "narcotrafico",
-      "sartor", "delitos economicos", "contrabando", "cohecho"], 4),
-    (["banco", "fintech", "notario", "inmobiliaria", "automotora", "factoring",
-      "leasing", "casino", "corredora", "fondos", "cripto", "transferencia",
-      "aduana", "zona franca", "cmf", "fiscalia"], 2),
-)
-
-
-def puntaje_candidato(reg):
-    texto = normaliza((reg.get("titulo", "") or "") + " " + (reg.get("resumen", "") or "")
-                      + " " + urllib.parse.unquote(reg.get("link", "") or ""))
-    puntaje = 0
-    for agujas, peso in PESOS_CANDIDATO:
-        if contiene(texto, agujas):
-            puntaje += peso
-    if reg.get("fuente_institucional"):
-        puntaje += 6
-    if reg.get("nivel_fuente") == "verificada":
-        puntaje += 1
-    fecha = reg.get("fecha_dt")
-    if fecha:
-        horas = (datetime.now(TZ_CL) - fecha).total_seconds() / 3600
-        if horas <= 36:
-            puntaje += 3
-        elif horas <= 120:
-            puntaje += 1
-    return puntaje
-
-
-def _mezcla_candidatos(destino, reg):
-    clave = id_estable(reg.get("link", ""), reg.get("titulo", ""))
-    previo = destino.get(clave)
-    if not previo:
-        destino[clave] = reg
-        return
-    for campo in ("resumen", "titulo"):
-        if len(str(reg.get(campo, ""))) > len(str(previo.get(campo, ""))):
-            previo[campo] = reg[campo]
-    if not previo.get("fecha_dt") and reg.get("fecha_dt"):
-        previo["fecha_dt"] = reg["fecha_dt"]
-    if reg.get("fuente_institucional"):
-        previo["fuente_institucional"] = True
-    if previo.get("origen") != reg.get("origen"):
-        previo["origenes"] = sorted(set(previo.get("origenes", [previo.get("origen", "")]))
-                                    | {reg.get("origen", "")})
-
-
-INFORME_COBERTURA = {}
-
-
-def _registra_cobertura(host, canal, n=1):
-    if not host:
-        return
-    fila = INFORME_COBERTURA.setdefault(host, {"candidatos": 0, "canales": {}})
-    fila["candidatos"] += n
-    fila["canales"][canal] = fila["canales"].get(canal, 0) + n
-
-
-# ─────────────────────────────────────────────────────────────
-# Canal directo: páginas de etiquetas temáticas de cada medio
-# ─────────────────────────────────────────────────────────────
-
-# Cada medio organiza sus notas en páginas de etiqueta/tag/categoría.  Estas
-# páginas son el ÍNDICE REAL de lo que publicaron, más completo que cualquier
-# feed o buscador.  Una nota que mencione a la UAF en el cuerpo pero cuyo
-# titular no diga «UAF» puede no aparecer en ninguna consulta de Google News;
-# sin embargo, sí aparece en la página de etiqueta «lavado-de-activos» del
-# medio, porque el editor la clasificó bajo esa categoría.
-
-PAGINAS_ETIQUETA = [
-    # La Tercera / Pulso
-    ("latercera.com", "https://www.latercera.com/etiqueta/uaf/"),
-    ("latercera.com", "https://www.latercera.com/etiqueta/lavado-de-activos/"),
-    ("latercera.com", "https://www.latercera.com/etiqueta/crimen-organizado/"),
-    ("latercera.com", "https://www.latercera.com/etiqueta/operacion-tokio/"),
-    ("latercera.com", "https://www.latercera.com/etiqueta/tren-de-aragua/"),
-    ("latercera.com", "https://www.latercera.com/etiqueta/secreto-bancario/"),
-    # BioBioChile
-    ("biobiochile.cl", "https://www.biobiochile.cl/lista/categorias/economia"),
-    ("biobiochile.cl", "https://www.biobiochile.cl/lista/categorias/nacional"),
-    # Emol
-    ("emol.com", "https://www.emol.com/tag/1038099/lavado-de-activos.html"),
-    ("emol.com", "https://www.emol.com/tag/1165730/uaf.html"),
-    # El Mostrador
-    ("elmostrador.cl", "https://www.elmostrador.cl/noticias/pais/"),
-    ("elmostrador.cl", "https://www.elmostrador.cl/mercados/"),
-    # CIPER
-    ("ciperchile.cl", "https://www.ciperchile.cl/category/economia/"),
-    # Diario Financiero
-    ("df.cl", "https://www.df.cl/mercados"),
-    ("df.cl", "https://www.df.cl/regulacion"),
-    # CNN Chile
-    ("cnnchile.com", "https://www.cnnchile.com/economia/"),
-    ("cnnchile.com", "https://www.cnnchile.com/pais/"),
-    # Cooperativa
-    ("cooperativa.cl", "https://www.cooperativa.cl/noticias/pais/judicial/"),
-    # T13
-    ("t13.cl", "https://www.t13.cl/etiqueta/lavado-de-activos"),
-    ("t13.cl", "https://www.t13.cl/etiqueta/uaf"),
-    # 24 Horas
-    ("24horas.cl", "https://www.24horas.cl/etiqueta/lavado-de-activos"),
-    # Ex-Ante
-    ("ex-ante.cl", "https://www.ex-ante.cl/categoria/economia/"),
-    # Interferencia
-    ("interferencia.cl", "https://interferencia.cl/tags/lavado-de-activos"),
-    # CHV Noticias
-    ("chilevision.cl", "https://www.chilevision.cl/noticias/economia"),
-    # Meganoticias
-    ("meganoticias.cl", "https://www.meganoticias.cl/economia/"),
-]
-
-
-def _extrae_enlaces_pagina(html_text, url_base):
-    """Extrae todos los enlaces de artículo de una página HTML de etiqueta/categoría."""
-    enlaces = {}
-    patron_a = re.compile(r'<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>(.*?)</a>',
-                           flags=re.I | re.S)
-    for m in patron_a.finditer(html_text):
-        href, interior = m.group(1), m.group(2)
-        href = urllib.parse.urljoin(url_base, html_mod.unescape(href))
-        if not url_http(href):
-            continue
-        host = dominio_url(href)
-        if not nivel_dominio_chileno(host):
-            continue
-        # Filtrar solo enlaces que parecen artículos (tienen slug largo o /noticia/)
-        ruta = urllib.parse.urlsplit(href).path
-        if len(ruta) < 25:
-            continue
-        if any(x in ruta for x in ("/etiqueta/", "/tag/", "/lista/", "/canal/",
-                                    "/autor/", "/categoria/", "/category/",
-                                    "/compra-", "/contacto", "/politica-privacidad",
-                                    "/newsletters", "/suscri")):
-            continue
-        titulo = limpia_html(interior).strip()
-        if not titulo or len(titulo) < 12 or len(titulo) > 500:
-            continue
-        if href not in enlaces or len(titulo) > len(enlaces[href]):
-            enlaces[href] = titulo
-    return enlaces
-
-
-def recolecta_etiquetas():
-    """Lee las páginas de etiquetas temáticas de cada medio prioritario.
-
-    Estas páginas son el índice editorial de artículos por tema.  Muchas notas
-    que mencionan a la UAF en el cuerpo aparecen aquí bajo etiquetas como
-    «lavado-de-activos» o «crimen-organizado» aunque su titular no diga UAF.
-    Es la vía más confiable para no perder artículos.
-    """
-    salida = []
-    procesados_urls = set()
-
-    def tarea(host, url):
-        def _ejecuta():
-            if tiempo_agotado(reserva=200):
-                return []
-            try:
-                contenido, final, headers = descarga(url, max_bytes=3_000_000, reintentos=1)
-                texto = _decodifica(contenido, headers)
-            except Exception as e:
-                log(f"  ! etiqueta {host}: {type(e).__name__}")
-                return []
-            enlaces = _extrae_enlaces_pagina(texto, final)
-            registros = []
-            for href, titulo in enlaces.items():
-                if href in procesados_urls:
-                    continue
-                procesados_urls.add(href)
-                h = dominio_url(href)
-                registros.append({
-                    "titulo": titulo[:500],
-                    "link": href,
-                    "medio": NOMBRE_POR_DOMINIO.get(h, h),
-                    "resumen": "",
-                    "fecha_dt": None,
-                    "origen": "Página de etiqueta",
-                    "fuente_url": f"https://{h}",
-                    "origen_busqueda": f"etiqueta:{host}",
-                })
-            return registros
-        return _ejecuta
-
-    tareas = [tarea(host, url) for host, url in PAGINAS_ETIQUETA]
-    salida = en_paralelo(tareas, "etiquetas temáticas")
-    log(f"  · Páginas de etiquetas temáticas → {len(salida)} artículos de {len(PAGINAS_ETIQUETA)} páginas")
-    return salida
-
-
-def recolecta_retrospectiva():
-    """Consultas retrospectivas para atrapar notas que se escaparon del descubrimiento inicial.
-
-    Google News permite «after:YYYY-MM-DD before:YYYY-MM-DD» para buscar ventanas pasadas.
-    Cada corrida revisa una franja de 3 días elegida al azar de los últimos 30, de modo que en
-    el transcurso de la semana se cubren prácticamente todos los días del historial.
-    """
-    import random
-    ahora = datetime.now(TZ_CL)
-    # Elegimos una ventana de 3 días entre 3 y 28 días atrás (las últimas 72h ya están bien cubiertas)
-    offset = random.randint(3, min(VENTANA_DIAS - 2, 28))
-    desde = (ahora - timedelta(days=offset + 2)).strftime("%Y-%m-%d")
-    hasta = (ahora - timedelta(days=offset)).strftime("%Y-%m-%d")
-    consultas_retro = [
-        f'"Unidad de Análisis Financiero" after:{desde} before:{hasta}',
-        f'"UAF" "lavado de activos" after:{desde} before:{hasta}',
-        f'"lavado de activos" Chile after:{desde} before:{hasta}',
-        f'"operaciones sospechosas" Chile after:{desde} before:{hasta}',
-    ]
-    # Añadir site: para los 8 medios de mayor volumen
-    for dominio in DOMINIOS_PRIORITARIOS[:8]:
-        consultas_retro.append(
-            f'site:{dominio} ("Unidad de Análisis Financiero" OR "lavado de activos") '
-            f'after:{desde} before:{hasta}')
-
-    def tarea(q):
-        def _ejecuta():
-            if tiempo_agotado(reserva=220):
-                return []
-            url = ("https://news.google.com/rss/search?q=" + urllib.parse.quote(q)
-                   + "&hl=es-419&gl=CL&ceid=CL:es-419")
-            hallazgos = lee_feed(url, "Google News retro")
-            for r in hallazgos:
-                r["origen_busqueda"] = f"retro:{q}"[:180]
-            return hallazgos
-        return _ejecuta
-
-    salida = en_paralelo([tarea(q) for q in consultas_retro], "retrospectiva")
-    if salida:
-        log(f"  · Retrospectiva {desde}/{hasta} → {len(salida)} resultados")
-    return salida
-
-
-def recolecta_prensa(estado, cuerpos_previos):
-    INFORME_COBERTURA.clear()
-    crudos = []
-    crudos += recolecta_google_news()
-    crudos += recolecta_bing_news()
-    crudos += recolecta_gdelt()
-    crudos += recolecta_perplexity()
-    crudos += recolecta_feeds_medios(estado)
-    crudos += recolecta_sitemaps(estado)
-    crudos += recolecta_uaf_oficial()
-    crudos += recolecta_etiquetas()
-    crudos += recolecta_retrospectiva()
-
-    candidatos = {}
-    descartados = 0
-    for r in crudos:
-        limpio = limpia_url(r.get("link", ""))
-        if not limpio:
-            descartados += 1
-            continue
-        r["link"] = limpio
-        chilena, nivel, host = clasifica_fuente(r)
-        if not chilena:
-            descartados += 1
-            continue
-        r["nivel_fuente"] = nivel
-        if host:
-            r["fuente_url"] = r.get("fuente_url") or f"https://{host}"
-            if host in NOMBRE_POR_DOMINIO:
-                r["medio"] = NOMBRE_POR_DOMINIO[host]
-        if es_fuente_institucional(r):
-            r["fuente_institucional"] = True
-        _registra_cobertura(host or dominio_url(r["link"]),
-                            str(r.get("origen_busqueda", "") or r.get("origen", "")).split(":")[0])
-        _mezcla_candidatos(candidatos, r)
-
-    procesados = estado.setdefault("procesados", {})
-    objetivo, barrido = [], []
-    for reg in candidatos.values():
-        reg["_puntaje"] = puntaje_candidato(reg)
-        visto = hash_url(reg["link"]) in procesados
-        tiene_cuerpo = hash_url(reg["link"]) in cuerpos_previos
-        if reg["_puntaje"] >= 10 or reg.get("fuente_institucional") or tiene_cuerpo:
-            objetivo.append(reg)
-        elif not visto:
-            barrido.append(reg)
-
-    orden = lambda r: (r["_puntaje"], r.get("fecha_dt") or datetime.min.replace(tzinfo=TZ_CL))
-    objetivo.sort(key=orden, reverse=True)
-    barrido.sort(key=orden, reverse=True)
-    objetivo = objetivo[:MAX_ARTICULOS_ENRIQUECER]
-    barrido = barrido[:PRESUPUESTO_BARRIDO]
-    log(f"  · candidatos chilenos únicos: {len(candidatos)} · objetivo: {len(objetivo)} · "
-        f"barrido profundo: {len(barrido)} · descartados: {descartados}")
-
-    trabajo = objetivo + barrido
-    reutilizados = 0
-    pendientes, listos = [], []
-    for reg in trabajo:
-        cache = cuerpos_previos.get(hash_url(reg["link"]))
-        if cache and cache.get("texto"):
-            reg["texto_enriquecido"] = cache["texto"]
-            reg["cuerpo_extraido"] = True
-            reg["enriquecido"] = True
-            if not reg.get("resumen"):
-                reg["resumen"] = cache.get("resumen", "")[:900]
-            if not reg.get("fecha_dt") and cache.get("fecha_iso"):
-                reg["fecha_dt"] = parsea_fecha_flexible(cache["fecha_iso"])
-            reg["fuente_institucional"] = es_fuente_institucional(reg)
-            reutilizados += 1
-            listos.append(reg)
-        else:
-            pendientes.append(reg)
-
-    enriquecidos = list(listos)
-    fallidos = 0
-    if pendientes:
-        with ThreadPoolExecutor(max_workers=HILOS) as pool:
-            futuros = {pool.submit(enriquece_articulo, r): r for r in pendientes}
-            for fut in as_completed(futuros):
-                try:
-                    resultado = fut.result()
-                except Exception:
-                    resultado = futuros[fut]
-                    resultado["cuerpo_extraido"] = False
-                if not resultado.get("cuerpo_extraido"):
-                    fallidos += 1
-                enriquecidos.append(resultado)
-
-    ahora_ts = time.time()
-    salida = []
-    cuerpos = 0
-    for reg in enriquecidos:
-        reg.pop("_puntaje", None)
-        limpio = limpia_url(reg.get("link", ""))
-        if not limpio:
-            continue
-        reg["link"] = limpio
-        procesados[hash_url(limpio)] = int(ahora_ts)
-        if not es_fuente_chilena(reg):
-            descartados += 1
-            continue
-        if reg.get("cuerpo_extraido"):
-            cuerpos += 1
-        salida.append(reg)
-    log(f"  · prensa chilena: {len(salida)} · cuerpos nuevos: {cuerpos} · "
-        f"reutilizados de caché: {reutilizados} · sin cuerpo: {fallidos}")
-    return salida
-
-
-# ─────────────────────────────────────────────────────────────
-# Métricas
-# ─────────────────────────────────────────────────────────────
-
-def _fecha_registro(reg):
-    iso = reg.get("fecha_iso")
-    if iso:
-        try:
-            dt = datetime.fromisoformat(iso)
-            return dt if dt.tzinfo else dt.replace(tzinfo=TZ_CL)
-        except ValueError:
-            pass
-    try:
-        return datetime.strptime(f"{reg['fecha']} {reg.get('hora', '00:00')}",
-                                 "%Y-%m-%d %H:%M").replace(tzinfo=TZ_CL)
-    except (KeyError, ValueError, TypeError):
-        return None
-
-
-MINIMO = datetime.min.replace(tzinfo=timezone.utc)
-
-
-def _ranking(registros, clave, etiqueta=None, excluir=None):
-    conteo = {}
-    for r in registros:
-        valores = r.get(clave, [])
-        if not isinstance(valores, list):
-            valores = [valores]
-        for valor in valores:
-            if valor in (None, "") or (excluir and valor in excluir):
-                continue
-            conteo[valor] = conteo.get(valor, 0) + 1
-    return [{"clave": k, "label": etiqueta.get(k, k) if etiqueta else k, "n": n}
-            for k, n in sorted(conteo.items(), key=lambda x: (-x[1], str(x[0])))]
-
-
-CAMPOS_DETALLE = (
-    "id", "fecha", "hora", "fecha_iso", "medio", "tipo_medio", "tipo_medio_label",
-    "titulo", "resumen", "link", "fenomeno", "fenomeno_label", "naturaleza",
-    "naturaleza_label", "precedentes", "precedentes_label", "topicos", "topicos_label",
-    "sujetos_obligados", "sujetos_obligados_label", "impactos_sujeto",
-    "impactos_sujeto_label", "uaf_confianza", "uaf_motivos", "uaf_puntaje",
-    "contexto_uaf", "nivel_fuente", "nivel_fuente_label",
-)
-
-
-def calcula_metricas(prensa, social, dias, ahora):
-    total = len(prensa)
-    uaf_registros = [r for r in prensa if r.get("uaf")]
-    uaf_prensa = [r for r in uaf_registros if not r.get("fuente_institucional")]
-    uaf_institucional = [r for r in uaf_registros if r.get("fuente_institucional")]
-    contexto = [r for r in prensa if not r.get("uaf")]
-
-    por_dia = {d: {"total": 0, "uaf": 0, "contexto": 0} for d in dias}
-    for r in prensa:
-        if r.get("fecha") in por_dia:
-            por_dia[r["fecha"]]["total"] += 1
-            por_dia[r["fecha"]]["uaf" if r.get("uaf") else "contexto"] += 1
-
-    corte24 = ahora - timedelta(hours=24)
-    corte48 = ahora - timedelta(hours=48)
-    corte5 = ahora - timedelta(days=5)
-    uaf24 = [r for r in uaf_prensa if (_fecha_registro(r) or MINIMO) >= corte24]
-    uaf_prev = [r for r in uaf_prensa if corte48 <= (_fecha_registro(r) or MINIMO) < corte24]
-    uaf5 = [r for r in uaf_prensa if (_fecha_registro(r) or MINIMO) >= corte5]
-    actual, previo = len(uaf24), len(uaf_prev)
-    diferencia = actual - previo
-    if previo:
-        pct = round(diferencia / previo * 100, 1)
-        direccion = "sube" if diferencia > 0 else ("baja" if diferencia < 0 else "estable")
-    else:
-        pct = None
-        direccion = "nueva" if actual > 0 else "estable"
-
-    fenomenos = _ranking(prensa, "fenomeno", FENOMENO_ETIQUETA)
-    precedentes = _ranking(prensa, "precedentes", PRECEDENTE_ETIQUETA)
-    naturalezas = _ranking(prensa, "naturaleza", NATURALEZA_ETIQUETA)
-    topicos = _ranking(prensa, "topicos", TOPICO_ETIQUETA)
-    tipos_medio = _ranking(prensa, "tipo_medio", TIPO_MEDIO_ETIQUETA)
-    medios = _ranking(prensa, "medio")
-    sujetos = _ranking(prensa, "sujetos_obligados", SUJETO_OBLIGADO_ETIQUETA)
-    impactos = _ranking(prensa, "impactos_sujeto", IMPACTO_SUJETO_ETIQUETA)
-
-    cronologia = []
-    for f in fenomenos:
-        celdas = []
-        for d in dias:
-            rs = [r for r in prensa if r.get("fenomeno") == f["clave"] and r.get("fecha") == d]
-            celdas.append({"dia": d, "n": len(rs), "medios": sorted({r["medio"] for r in rs})})
-        cronologia.append({"clave": f["clave"], "label": f["label"], "celdas": celdas,
-                           "total": f["n"]})
-
-    semanas, bloque = [], []
-    for dia in dias:
-        bloque.append(dia)
-        if datetime.strptime(dia, "%Y-%m-%d").weekday() == 6 or dia == dias[-1]:
-            regs = [r for r in prensa if r.get("fecha") in bloque]
-            semanas.append({
-                "desde": bloque[0], "hasta": bloque[-1], "total": len(regs),
-                "uaf": sum(1 for r in regs if r.get("uaf")),
-                "contexto": sum(1 for r in regs if not r.get("uaf")),
-                "medios": len({r["medio"] for r in regs}),
-            })
-            bloque = []
-
-    plataformas = []
-    for p in PLATAFORMAS:
-        posts = [s for s in social if s.get("plataforma") == p["id"]]
-        base = dict(p)
-        base.update({
-            "menciones": len(posts),
-            "menciones_uaf": sum(1 for s in posts if s.get("uaf")),
-            "interacciones": sum(int(s.get("interacciones", 0) or 0) for s in posts),
-        })
-        plataformas.append(base)
-
-    detalle = [{k: r.get(k) for k in CAMPOS_DETALLE}
-               for r in sorted(uaf24, key=lambda x: (_fecha_registro(x) or MINIMO), reverse=True)]
-
-    return {
-        "uaf_portada": {
-            "menciones_24h": actual,
-            "menciones_previas_24h": previo,
-            "diferencia": diferencia,
-            "variacion_pct": pct,
-            "direccion": direccion,
-            "menciones_5d": len(uaf5),
-            "medios_24h": len({r["medio"] for r in uaf24}),
-            "medios_5d": len({r["medio"] for r in uaf5}),
-            "topicos_24h": _ranking(uaf24, "topicos", TOPICO_ETIQUETA),
-            "fenomenos_24h": _ranking(uaf24, "fenomeno", FENOMENO_ETIQUETA),
-            "naturalezas_24h": _ranking(uaf24, "naturaleza", NATURALEZA_ETIQUETA),
-            "tipos_medio_24h": _ranking(uaf24, "tipo_medio", TIPO_MEDIO_ETIQUETA),
-            "medios_ranking_24h": _ranking(uaf24, "medio"),
-            "sujetos_obligados_24h": _ranking(uaf24, "sujetos_obligados", SUJETO_OBLIGADO_ETIQUETA),
-            "confianza_24h": _ranking(uaf24, "uaf_confianza"),
-            "detalle": detalle,
-        },
-        "uaf_total": len(uaf_registros),
-        "uaf_prensa": len(uaf_prensa),
-        "uaf_institucional": len(uaf_institucional),
-        "uaf_social": sum(1 for r in social if r.get("uaf")),
-        "uaf_donde": detalle[:8],
-        "contexto_total": len(contexto),
-        "volumen": total,
-        "volumen_hoy": por_dia[dias[-1]]["total"] if dias else 0,
-        "dias_con_actividad": sum(1 for d in dias if por_dia[d]["total"] > 0),
-        "dias_ventana": len(dias),
-        "medios_unicos": len({r["medio"] for r in prensa}),
-        "casos_activos": len([f for f in fenomenos if f["clave"] != "otro"]),
-        "precedentes_distintos": len([p for p in precedentes if p["clave"] != "indeterminado"]),
-        "fenomenos": fenomenos,
-        "precedentes": precedentes,
-        "naturalezas": naturalezas,
-        "topicos": topicos,
-        "tipos_medio": tipos_medio,
-        "medios": medios,
-        "sujetos_obligados": sujetos,
-        "impactos_sujeto": impactos,
-        "niveles_fuente": _ranking(prensa, "nivel_fuente", NIVEL_FUENTE_ETIQUETA),
-        "cronologia": cronologia,
-        "por_dia": por_dia,
-        "semanas": semanas,
-        "rankings_30d": {
-            "medios": medios[:12],
-            "fenomenos": [x for x in fenomenos if x["clave"] != "otro"][:12],
-            "precedentes": [x for x in precedentes if x["clave"] != "indeterminado"][:12],
-            "sujetos_obligados": sujetos[:12],
-            "impactos_sujeto": impactos[:12],
-        },
-        "plataformas": plataformas,
-        "social_total": len(social),
-        "social_monitoreadas": len(plataformas),
-        "social_sin_acceso": 0,
-    }
-
-
-# ─────────────────────────────────────────────────────────────
-# Configuración y correo
-# ─────────────────────────────────────────────────────────────
-
-def carga_config():
-    config = copy.deepcopy(CONFIG_EJEMPLO)
-    if os.path.exists(CONFIG):
-        try:
-            with open(CONFIG, encoding="utf-8") as fh:
-                usuario = json.load(fh)
-            if isinstance(usuario.get("correo"), dict):
-                config["correo"].update(usuario["correo"])
-        except (OSError, json.JSONDecodeError) as e:
-            log(f"! config.json ilegible: {type(e).__name__}")
-    elif not os.getenv("GITHUB_ACTIONS"):
-        try:
-            with open(CONFIG, "w", encoding="utf-8") as fh:
-                json.dump(config, fh, ensure_ascii=False, indent=2)
-            log("Se creó config.json con el correo desactivado.")
-        except OSError:
-            pass
-
-    c = config["correo"]
-    c["activo"] = _env_bool("MONITOR_CORREO_ACTIVO", bool(c.get("activo", False)))
-    c["servidor"] = os.getenv("MONITOR_SMTP_SERVIDOR", c.get("servidor", "")).strip()
-    c["puerto"] = _env_int("MONITOR_SMTP_PUERTO", int(c.get("puerto", 587) or 587))
-    c["seguridad"] = os.getenv("MONITOR_SMTP_SEGURIDAD", c.get("seguridad", "starttls")).strip()
-    c["usuario"] = os.getenv("MONITOR_SMTP_USUARIO", c.get("usuario", "")).strip()
-    c["clave"] = os.getenv("MONITOR_SMTP_CLAVE", c.get("clave", ""))
-    c["remitente"] = os.getenv("MONITOR_REMITENTE", c.get("remitente", c["usuario"])).strip()
-    c["remitente_nombre"] = os.getenv("MONITOR_REMITENTE_NOMBRE",
-                                      c.get("remitente_nombre", "Monitor UAF Chile"))
-    destinos = os.getenv("MONITOR_DESTINATARIOS")
-    if destinos:
-        c["destinatarios"] = [x.strip() for x in re.split(r"[,;\s]+", destinos) if "@" in x]
-    c["minimo_para_avisar"] = _env_int("MONITOR_MINIMO_AVISO",
-                                       int(c.get("minimo_para_avisar", 1) or 1))
-    c["silencio_minutos"] = _env_int("MONITOR_SILENCIO_MINUTOS",
-                                     int(c.get("silencio_minutos", 0) or 0))
-    c["solo_si_menciona_uaf"] = _env_bool("MONITOR_SOLO_UAF",
-                                          bool(c.get("solo_si_menciona_uaf", True)))
-    return config
-
-
-def _conecta_smtp(c):
-    servidor = c.get("servidor", "")
-    puerto = int(c.get("puerto", 587) or 587)
-    seguridad = str(c.get("seguridad", "starttls")).lower().strip()
-    contexto = ssl.create_default_context()
-    if seguridad in {"ssl", "smtps"}:
-        smtp = smtplib.SMTP_SSL(servidor, puerto, timeout=30, context=contexto)
-    else:
-        smtp = smtplib.SMTP(servidor, puerto, timeout=30)
-        smtp.ehlo()
-        if seguridad == "starttls":
-            smtp.starttls(context=contexto)
-            smtp.ehlo()
-    usuario, clave = c.get("usuario", ""), c.get("clave", "")
-    if usuario and clave:
-        smtp.login(usuario, clave)
-    return smtp
-
-
-def _manda_mensaje(c, asunto, cuerpo_html, cuerpo_texto):
-    destinatarios = [d for d in (c.get("destinatarios") or []) if "@" in d]
-    remitente = c.get("remitente") or c.get("usuario", "")
-    if not c.get("servidor") or not remitente or not destinatarios:
-        raise ValueError("faltan servidor, remitente o destinatarios")
-    msg = EmailMessage()
-    msg["Subject"] = asunto
-    msg["From"] = formataddr((c.get("remitente_nombre", "Monitor UAF Chile"), remitente))
-    msg["To"] = ", ".join(destinatarios)
-    msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid(domain="monitor-uaf.local")
-    msg["Auto-Submitted"] = "auto-generated"
-    msg.set_content(cuerpo_texto)
-    msg.add_alternative(cuerpo_html, subtype="html")
-    with _conecta_smtp(c) as smtp:
-        smtp.send_message(msg)
-
-
-def envia_correo(config, nuevos, metricas, estado):
-    """Avisa cuando la corrida detecta noticias nuevas de prensa con UAF Chile."""
-    c = config.get("correo", {})
-    if not c.get("activo"):
-        return False
-
-    if c.get("solo_si_menciona_uaf", True):
-        candidatos = [n for n in nuevos
-                      if n.get("canal") == "prensa" and n.get("uaf_chile") is True]
-    else:
-        candidatos = [n for n in nuevos if n.get("canal") == "prensa"]
-    minimo = max(1, int(c.get("minimo_para_avisar", 1) or 1))
-    if len(candidatos) < minimo:
-        log(f"Correo omitido: {len(candidatos)} noticias nuevas UAF Chile (mínimo {minimo}).")
-        return False
-
-    silencio = max(0, int(c.get("silencio_minutos", 0) or 0))
-    ultimo = estado.get("ultimo_correo")
-    if ultimo and silencio:
-        try:
-            anterior = datetime.fromisoformat(ultimo)
-            if anterior.tzinfo is None:
-                anterior = anterior.replace(tzinfo=TZ_CL)
-            if datetime.now(TZ_CL) - anterior < timedelta(minutes=silencio):
-                log("Correo omitido por período de silencio configurado.")
-                return False
-        except ValueError:
-            pass
-
-    esc = html_mod.escape
-    filas_html, filas_texto = [], []
-    for n in candidatos[:25]:
-        topicos = ", ".join(n.get("topicos_label", [])) or "Sin tópico asignado"
-        naturaleza = n.get("naturaleza_label", "Sin clasificación")
-        fenomeno = n.get("fenomeno_label", "Otros")
-        sujetos = ", ".join(n.get("sujetos_obligados_label", [])) or "No identificado"
-        extracto = (n.get("contexto_uaf") or n.get("resumen") or "").strip()
-        enlace = n.get("link", "") if url_http(n.get("link", "")) else ""
-        extracto_html = (f'<div style="margin-top:6px;color:#44546a">{esc(extracto[:600])}</div>'
-                         if extracto else "")
-        titulo_html = esc(n.get("titulo", "(sin título)"))
-        if enlace:
-            titulo_html = (f'<a style="color:#005b78" href="{esc(enlace, quote=True)}">'
-                           f'{titulo_html}</a>')
-        filas_html.append(
-            '<li style="margin:0 0 18px;padding:0 0 14px;border-bottom:1px solid #d9e2ec">'
-            f'<div style="font-size:13px;color:#52647a"><b>{esc(n.get("medio", ""))}</b> · '
-            f'{esc(n.get("fecha", ""))} {esc(n.get("hora", ""))} · '
-            f'validación {esc(n.get("uaf_confianza", ""))}</div>'
-            f'<div style="font-size:17px;font-weight:700;margin:4px 0">{titulo_html}</div>'
-            f'<div style="font-size:13px;color:#334e68">'
-            f'<b>Tópicos:</b> {esc(topicos)} · <b>Tipo:</b> {esc(naturaleza)} · '
-            f'<b>Fenómeno:</b> {esc(fenomeno)} · <b>Sujeto obligado:</b> {esc(sujetos)}</div>'
-            f'{extracto_html}</li>'
-        )
-        filas_texto.append(
-            f'- {n.get("medio", "")} · {n.get("fecha", "")} {n.get("hora", "")}\n'
-            f'  {n.get("titulo", "")}\n'
-            f'  Tópicos: {topicos} | Tipo: {naturaleza} | Fenómeno: {fenomeno} | '
-            f'Sujeto obligado: {sujetos}\n  {enlace}'
-        )
-
-    cantidad = len(candidatos)
-    plural = "s" if cantidad != 1 else ""
-    asunto = f"Alerta UAF Chile: {cantidad} noticia{plural} nueva{plural}"
-    portada = metricas.get("uaf_portada", {}) if isinstance(metricas, dict) else {}
-    total_24h = portada.get("menciones_24h", 0)
-    cuerpo_html = (
-        '<div style="font-family:Arial,sans-serif;max-width:780px;color:#102a43">'
-        '<div style="background:#073b4c;color:white;padding:18px 22px;border-left:7px solid #18a0a8">'
-        '<div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase">Monitor UAF Chile</div>'
-        f'<h2 style="margin:5px 0 0">{esc(asunto)}</h2></div>'
-        '<div style="padding:18px 22px;background:#f5f8fb">'
-        '<p style="margin-top:0">La actualización automática detectó noticias nuevas de prensa '
-        'con mención validada a la <b>Unidad de Análisis Financiero de Chile</b>.</p>'
-        f'<p>Menciones UAF en prensa durante las últimas 24 horas: <b>{int(total_24h)}</b>.</p>'
-        f'<ol style="padding-left:22px">{"".join(filas_html)}</ol>'
-        '<p style="font-size:12px;color:#627d98">Aviso generado solo para noticias nuevas; '
-        'la misma noticia no se reenvía en corridas posteriores.</p></div></div>'
-    )
-    try:
-        _manda_mensaje(c, asunto, cuerpo_html, asunto + "\n\n" + "\n\n".join(filas_texto))
-    except Exception as e:
-        log(f"! fallo al enviar correo: {type(e).__name__}: {e}")
-        return False
-
-    estado["ultimo_correo"] = datetime.now(TZ_CL).isoformat()
-    log(f"Correo enviado a {len(c.get('destinatarios', []))} destinatario(s).")
-    return True
-
-
-def prueba_correo():
-    c = carga_config().get("correo", {})
-    log(f"SMTP configurado: servidor={'sí' if c.get('servidor') else 'no'} · "
-        f"usuario={'sí' if c.get('usuario') else 'no'} · "
-        f"destinatarios={len(c.get('destinatarios') or [])}")
-    try:
-        _manda_mensaje(c, "Prueba del Monitor UAF Chile",
-                       "<p>La configuración SMTP del Monitor UAF funciona.</p>",
-                       "La configuración SMTP del Monitor UAF funciona.")
-    except Exception as e:
-        log(f"! prueba de correo fallida: {type(e).__name__}: {e}")
-        raise SystemExit(1)
-    log("Correo de prueba enviado correctamente.")
-
-
-# ─────────────────────────────────────────────────────────────
-# Estado, histórico y ciclo principal
-# ─────────────────────────────────────────────────────────────
-
-def carga_estado():
-    estado = {"vistos": [], "procesados": {}, "endpoints": {}, "esquema": ESQUEMA_ID}
-    if os.path.exists(ESTADO):
-        try:
-            with open(ESTADO, encoding="utf-8") as fh:
-                guardado = json.load(fh)
-            if isinstance(guardado, dict):
-                estado.update(guardado)
-        except (OSError, json.JSONDecodeError):
-            log("! estado ilegible; se reinicia la memoria de la corrida")
+        return copy.deepcopy(defecto)
+
+
+def carga_estado() -> dict[str, Any]:
+    estado = carga_json(ESTADO, {})
+    if estado.get("esquema") != ESQUEMA_ESTADO:
+        # Conserva vistos para no reenviar correos, pero fuerza revisión de descartes antiguos.
+        estado = {"vistos": estado.get("vistos", []), "rotacion_fuentes": estado.get("rotacion_fuentes", 0),
+                  "esquema": ESQUEMA_ESTADO, "procesados": {}, "pendientes": {},
+                  "migracion_pendiente": True}
     estado.setdefault("vistos", [])
     estado.setdefault("procesados", {})
-    estado.setdefault("endpoints", {})
-    if not isinstance(estado.get("procesados"), dict):
-        estado["procesados"] = {}
+    estado.setdefault("pendientes", {})
+    estado.setdefault("esquema", ESQUEMA_ESTADO)
     return estado
 
 
-def guarda_estado(estado):
-    estado["vistos"] = list(dict.fromkeys(estado.get("vistos", [])))[-20000:]
-    limite = time.time() - DIAS_PROCESADOS * 86400
-    procesados = {k: v for k, v in (estado.get("procesados") or {}).items()
-                  if isinstance(v, (int, float)) and v >= limite}
-    if len(procesados) > MAX_PROCESADOS:
-        recientes = sorted(procesados.items(), key=lambda x: x[1], reverse=True)[:MAX_PROCESADOS]
-        procesados = dict(recientes)
-    estado["procesados"] = procesados
-    estado["esquema"] = ESQUEMA_ID
-    estado["actualizado"] = datetime.now(TZ_CL).isoformat()
-    temporal = ESTADO + ".tmp"
-    with open(temporal, "w", encoding="utf-8") as fh:
-        json.dump(estado, fh, ensure_ascii=False)
+def guarda_estado(estado: dict[str, Any]) -> None:
+    corte = ahora_cl() - timedelta(days=RETENCION_PROCESADOS_DIAS)
+    procesados = {}
+    for k, v in (estado.get("procesados") or {}).items():
+        f = parsea_fecha(v.get("revisado"))
+        if not f or f >= corte:
+            procesados[k] = v
+    estado["procesados"] = dict(list(procesados.items())[-50_000:])
+    estado["vistos"] = list(dict.fromkeys(estado.get("vistos", [])))[-50_000:]
+    temporal = ESTADO.with_suffix(".tmp")
+    temporal.write_text(json.dumps(estado, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(temporal, ESTADO)
 
 
-def carga_datos_previos():
-    if not os.path.exists(SALIDA):
-        return {"prensa": [], "social": []}
-    try:
-        with open(SALIDA, encoding="utf-8") as fh:
-            datos = json.load(fh)
-        return {"prensa": datos.get("prensa", []) or [], "social": datos.get("social", []) or []}
-    except (OSError, json.JSONDecodeError):
-        log("! datos.json previo ilegible; se parte del histórico vacío")
-        return {"prensa": [], "social": []}
+def carga_previos() -> dict[str, Any]:
+    return carga_json(SALIDA, {"prensa": [], "social": [], "candidatos_pendientes": []})
 
 
-def indice_cuerpos(previos):
-    """Caché de cuerpos ya extraídos para no volver a descargar el mismo artículo."""
-    cache = {}
-    for r in previos.get("prensa", []):
-        enlace = r.get("link", "")
-        texto = r.get("texto_enriquecido", "")
-        if enlace and texto:
-            cache[hash_url(enlace)] = {
-                "texto": texto,
-                "resumen": r.get("resumen", ""),
-                "fecha_iso": r.get("fecha_iso", ""),
-            }
-    return cache
+def debe_revisar(c: dict[str, Any], estado: dict[str, Any], modo: str) -> bool:
+    k = id_registro(c["link"], c.get("titulo", ""))
+    prev = (estado.get("procesados") or {}).get(k)
+    if not prev:
+        return True
+    revisado = parsea_fecha(prev.get("revisado"))
+    if modo == "conciliacion" and prev.get("estado") not in {"aceptado_uaf", "aceptado_contexto"}:
+        return not revisado or revisado < ahora_cl() - timedelta(days=5)
+    if prev.get("estado") in {"error_descarga", "bloqueado_robots", "cuerpo_insuficiente", "pendiente_pdf"}:
+        return not revisado or revisado < ahora_cl() - timedelta(days=2)
+    return False
 
 
-def _crudo_desde_registro(reg):
+def razon_descarte(reg: dict[str, Any]) -> str:
+    estado = reg.get("estado_extraccion", "")
+    if estado and estado != "completo" and not reg.get("titulo") and not reg.get("resumen"):
+        return estado
+    if reg.get("fecha_dt") and not dentro_ventana(reg["fecha_dt"]):
+        return "fuera_de_ventana"
+    if not MENCION_UAF_RE.search(texto_registro(reg)) and not es_pertinente(reg):
+        return "sin_mencion_ni_contexto_laft"
+    if MENCION_UAF_RE.search(texto_registro(reg)) and not analiza_uaf(reg)[0]:
+        return "uaf_ambigua_o_extranjera"
+    return "no_pertinente"
+
+
+def candidato_pendiente(reg: dict[str, Any], motivo: str) -> dict[str, Any]:
+    f = reg.get("fecha_dt") or ahora_cl()
     return {
-        "titulo": reg.get("titulo", ""),
-        "resumen": reg.get("resumen", ""),
-        "medio": reg.get("medio", ""),
-        "fuente_url": reg.get("fuente_url", ""),
-        "url_final": reg.get("url_final", ""),
+        "id": id_registro(reg.get("link", ""), reg.get("titulo", "")),
+        "fecha": f.strftime("%Y-%m-%d"),
+        "medio": reg.get("medio", dominio_url(reg.get("link", ""))),
+        "titulo": reg.get("titulo") or "Sin título recuperado",
         "link": reg.get("link", ""),
-        "texto_enriquecido": reg.get("texto_enriquecido", ""),
-        "contexto_uaf": reg.get("contexto_uaf", ""),
-        "fuente_institucional": reg.get("fuente_institucional", False),
-        "enlaza_uaf": reg.get("enlaza_uaf", False),
+        "motivo": motivo,
+        "evidencia": limpia_texto(reg.get("resumen", ""))[:300],
+        "origenes_busqueda": reg.get("origenes_busqueda", [reg.get("origen_busqueda", "")]),
+        "ultima_revision": ahora_cl().isoformat(),
     }
 
 
-def etiqueta_registro(reg):
-    reg["topicos_label"] = [TOPICO_ETIQUETA.get(t, t) for t in reg.get("topicos", ["otros"])]
-    reg["tipo_medio_label"] = TIPO_MEDIO_ETIQUETA.get(reg.get("tipo_medio", "otro"),
-                                                      "Otro medio digital")
-    reg["sujetos_obligados_label"] = [SUJETO_OBLIGADO_ETIQUETA.get(x, x)
-                                      for x in reg.get("sujetos_obligados", [])]
-    reg["impactos_sujeto_label"] = [IMPACTO_SUJETO_ETIQUETA.get(x, x)
-                                    for x in reg.get("impactos_sujeto", [])]
-    reg["fenomeno_label"] = FENOMENO_ETIQUETA.get(reg.get("fenomeno", "otro"), "Otros")
-    reg["naturaleza_label"] = NATURALEZA_ETIQUETA.get(reg.get("naturaleza", "analisis"),
-                                                      "Análisis y opinión")
-    reg["precedentes_label"] = [PRECEDENTE_ETIQUETA.get(x, x)
-                               for x in reg.get("precedentes", ["indeterminado"])]
-    reg["nivel_fuente_label"] = NIVEL_FUENTE_ETIQUETA.get(reg.get("nivel_fuente", ""), "")
-    return reg
+def registro_publicable(reg: dict[str, Any], modo: str) -> dict[str, Any]:
+    r = clasifica(dict(reg))
+    fecha_dt = r.get("fecha_dt") or ahora_cl()
+    r.update({
+        "id": id_registro(r.get("link", ""), r.get("titulo", "")),
+        "canal": "prensa",
+        "fecha": fecha_dt.strftime("%Y-%m-%d"),
+        "fecha_hora": fecha_dt.isoformat(),
+        "fecha_legible": fecha_dt.strftime("%d/%m/%Y"),
+        "medio": r.get("medio") or (fuente_para_host(dominio_url(r.get("link", ""))) or {}).get("nombre", dominio_url(r.get("link", ""))),
+        "resumen": limpia_texto(r.get("resumen", ""))[:1000],
+        "titulo": limpia_texto(r.get("titulo", ""))[:500],
+        "texto_enriquecido": limpia_texto(r.get("texto_enriquecido", ""))[:MAX_TEXTO_GUARDADO],
+        "origen_busqueda": (r.get("origenes_busqueda") or [r.get("origen_busqueda", "desconocido")])[0],
+        "origenes_busqueda": sorted(set(r.get("origenes_busqueda") or [r.get("origen_busqueda", "desconocido")])),
+        "incorporado_por": modo,
+    })
+    r.pop("_puntaje", None)
+    r.pop("amp_url", None)
+    r.pop("links", None)
+    return r
 
 
-def reclasifica_historico(original):
-    """Aplica las reglas vigentes a un registro histórico."""
-    r = dict(original)
-    dt = _fecha_registro(r)
-    if dt and not r.get("fecha_iso"):
-        r["fecha_iso"] = dt.isoformat()
-    crudo = _crudo_desde_registro(r)
-    r["canal"] = r.get("canal", "prensa")
-    r["fuente_institucional"] = bool(r.get("fuente_institucional")
-                                     or es_fuente_institucional(crudo))
-    enriquecido = clasifica(crudo)
-    for campo in ("fenomeno", "naturaleza", "precedentes", "topicos", "tipo_medio", "uaf",
-                  "uaf_chile", "uaf_confianza", "uaf_motivos", "uaf_puntaje", "uaf_menciones",
-                  "sujetos_obligados", "impactos_sujeto", "roles_sujetos", "roles_sujetos_label",
-                  "nucleo", "nivel_fuente"):
-        r[campo] = enriquecido.get(campo)
-    if enriquecido.get("contexto_uaf"):
-        r["contexto_uaf"] = enriquecido["contexto_uaf"]
-    return etiqueta_registro(r)
+def calidad_registro(r: dict[str, Any]) -> int:
+    return (20 if r.get("cuerpo_extraido") else 0) + len(r.get("texto_enriquecido", "")) // 200 + (10 if r.get("uaf") else 0) + len(r.get("resumen", "")) // 100
 
 
-def mezcla_historico(previos, actuales, corte):
-    combinados = {}
-    for original in list(previos) + list(actuales):
-        crudo = _crudo_desde_registro(original)
-        canal = original.get("canal", "prensa")
-        if canal == "prensa" and not es_fuente_chilena(crudo):
+def mezcla_historico(previos: list[dict[str, Any]], nuevos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    corte = ahora_cl() - timedelta(days=VENTANA_DIAS)
+    por_id: dict[str, dict[str, Any]] = {}
+    for r in previos + nuevos:
+        fecha_dt = parsea_fecha(r.get("fecha_hora") or r.get("fecha"))
+        if fecha_dt and fecha_dt < corte:
             continue
-        if not es_pertinente(crudo):
-            continue
-        r = reclasifica_historico(original)
-        rid = r.get("id") or id_estable(r.get("link", ""), r.get("titulo", ""))
+        rid = r.get("id") or id_registro(r.get("link", ""), r.get("titulo", ""))
         r["id"] = rid
-        dt = _fecha_registro(r)
-        if not dt or dt < corte:
-            continue
-        anterior = combinados.get(rid)
-        if anterior and len(str(anterior.get("texto_enriquecido", ""))) > len(str(r.get("texto_enriquecido", ""))):
-            continue
-        combinados[rid] = r
-    ordenados = sorted(combinados.values(),
-                       key=lambda r: (_fecha_registro(r) or corte), reverse=True)
-    vistos_titulo, unicos = {}, []
-    for r in ordenados:
-        clave = (normaliza(r.get("titulo", ""))[:95], normaliza(r.get("medio", "")))
-        if not clave[0]:
-            unicos.append(r)
-            continue
-        previo = vistos_titulo.get(clave)
-        if previo is None:
-            vistos_titulo[clave] = r
-            unicos.append(r)
-            continue
-        # Se conserva el registro con enlace directo al medio y más contenido.
-        def calidad(x):
-            return (dominio_url(x.get("link", "")) not in AGREGADORES,
-                    len(str(x.get("texto_enriquecido", ""))),
-                    len(str(x.get("resumen", ""))))
-        if calidad(r) > calidad(previo):
-            unicos[unicos.index(previo)] = r
-            vistos_titulo[clave] = r
-    return unicos
+        anterior = por_id.get(rid)
+        if not anterior or calidad_registro(r) >= calidad_registro(anterior):
+            por_id[rid] = r
+        else:
+            anterior["origenes_busqueda"] = sorted(set(anterior.get("origenes_busqueda", []) + r.get("origenes_busqueda", [])))
+    return sorted(por_id.values(), key=lambda r: r.get("fecha_hora", r.get("fecha", "")), reverse=True)
 
 
-def pasada():
-    ahora = datetime.now(TZ_CL)
-    corte = (ahora - timedelta(days=VENTANA_DIAS)).replace(second=0, microsecond=0)
-    primer_dia = (ahora - timedelta(days=VENTANA_DIAS - 1)).date()
-    dias = [(primer_dia + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(VENTANA_DIAS)]
+def ranking(registros: list[dict[str, Any]], clave: str, labels: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    c: Counter[str] = Counter()
+    for r in registros:
+        valor = r.get(clave)
+        valores = valor if isinstance(valor, list) else [valor]
+        for v in valores:
+            if v:
+                c[str(v)] += 1
+    return [{"clave": k, "label": (labels or {}).get(k, k), "n": n} for k, n in c.most_common(20)]
 
+
+def calcula_metricas(prensa: list[dict[str, Any]], social: list[dict[str, Any]], dias: list[str], ahora: datetime) -> dict[str, Any]:
+    uaf = [r for r in prensa if r.get("uaf")]
+    contexto = [r for r in prensa if not r.get("uaf")]
+    c24 = ahora - timedelta(hours=24)
+    c48 = ahora - timedelta(hours=48)
+    c5 = ahora - timedelta(days=5)
+    uaf_prensa_publica = [r for r in uaf if not r.get("fuente_institucional")]
+    cur = [r for r in uaf_prensa_publica if (parsea_fecha(r.get("fecha_hora")) or datetime.min.replace(tzinfo=TZ_CL)) >= c24]
+    prev = [r for r in uaf_prensa_publica if c48 <= (parsea_fecha(r.get("fecha_hora")) or datetime.min.replace(tzinfo=TZ_CL)) < c24]
+    five = [r for r in uaf_prensa_publica if (parsea_fecha(r.get("fecha_hora")) or datetime.min.replace(tzinfo=TZ_CL)) >= c5]
+    por_dia = {d: sum(1 for r in prensa if r.get("fecha") == d) for d in dias}
+    return {
+        "uaf_portada": {
+            "menciones_24h": len(cur), "menciones_previas_24h": len(prev), "diferencia": len(cur) - len(prev),
+            "variacion_pct": round((len(cur) - len(prev)) / len(prev) * 100, 1) if prev else None,
+            "direccion": "alza" if len(cur) > len(prev) else "baja" if len(cur) < len(prev) else "estable",
+            "menciones_5d": len(five), "medios_24h": len({r.get("medio") for r in cur}),
+            "medios_5d": len({r.get("medio") for r in five}),
+            "topicos_24h": ranking(cur, "topicos", LABELS["topicos"]),
+            "fenomenos_24h": ranking(cur, "fenomeno", LABELS["fenomeno"]),
+            "naturalezas_24h": ranking(cur, "naturaleza", LABELS["naturaleza"]),
+            "tipos_medio_24h": ranking(cur, "tipo_medio"),
+            "medios_ranking_24h": ranking(cur, "medio"),
+            "sujetos_obligados_24h": ranking(cur, "sujetos_obligados", LABELS["sujetos"]),
+            "detalle": cur[:20],
+        },
+        "uaf_total": len(uaf), "uaf_prensa": len(uaf), "uaf_social": 0,
+        "uaf_donde": [{"fecha": r.get("fecha"), "medio": r.get("medio"), "titulo": r.get("titulo"), "link": r.get("link")} for r in uaf[:20]],
+        "contexto_total": len(contexto), "volumen": len(prensa) + len(social),
+        "volumen_hoy": por_dia.get(ahora.strftime("%Y-%m-%d"), 0),
+        "dias_con_actividad": sum(1 for n in por_dia.values() if n), "dias_ventana": len(dias),
+        "medios_unicos": len({r.get("medio") for r in prensa}),
+        "casos_activos": len({r.get("fenomeno") for r in prensa if r.get("fenomeno") not in {None, "otro"}}),
+        "precedentes_distintos": len({x for r in prensa for x in r.get("precedentes", []) if x != "indeterminado"}),
+        "fenomenos": ranking(prensa, "fenomeno", LABELS["fenomeno"]),
+        "precedentes": ranking(prensa, "precedentes", LABELS["precedentes"]),
+        "naturalezas": ranking(prensa, "naturaleza", LABELS["naturaleza"]),
+        "topicos": ranking(prensa, "topicos", LABELS["topicos"]),
+        "tipos_medio": ranking(prensa, "tipo_medio"),
+        "sujetos_obligados": ranking(prensa, "sujetos_obligados", LABELS["sujetos"]),
+        "impactos_sujeto": ranking(prensa, "impactos_sujeto"),
+        "medios": ranking(prensa, "medio"), "por_dia": por_dia,
+        "plataformas": [], "social_sin_acceso": 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Correo
+# ---------------------------------------------------------------------------
+
+
+def carga_config() -> dict[str, Any]:
+    if not CONFIG.exists():
+        try:
+            CONFIG.write_text(json.dumps(CONFIG_EJEMPLO, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+    cfg = carga_json(CONFIG, CONFIG_EJEMPLO)
+    correo = cfg.setdefault("correo", {})
+    mapa = {
+        "activo": ("MONITOR_CORREO_ACTIVO", env_bool), "servidor": ("MONITOR_SMTP_SERVIDOR", str),
+        "puerto": ("MONITOR_SMTP_PUERTO", int), "seguridad": ("MONITOR_SMTP_SEGURIDAD", str),
+        "usuario": ("MONITOR_SMTP_USUARIO", str), "clave": ("MONITOR_SMTP_CLAVE", str),
+        "remitente_nombre": ("MONITOR_REMITENTE_NOMBRE", str), "minimo_para_avisar": ("MONITOR_MINIMO_AVISO", int),
+        "silencio_minutos": ("MONITOR_SILENCIO_MINUTOS", int), "solo_si_menciona_uaf": ("MONITOR_SOLO_UAF", env_bool),
+    }
+    for clave, (env, conv) in mapa.items():
+        valor = os.getenv(env)
+        if valor is not None and valor != "":
+            try:
+                correo[clave] = conv(env, correo.get(clave)) if conv is env_bool else conv(valor)
+            except Exception:
+                pass
+    dest = os.getenv("MONITOR_DESTINATARIOS")
+    if dest:
+        correo["destinatarios"] = [x.strip() for x in dest.split(",") if x.strip()]
+    return cfg
+
+
+def envia_correo(nuevos: list[dict[str, Any]], estado: dict[str, Any], modo: str) -> None:
+    if modo != "rapido":
+        return
+    cfg = carga_config().get("correo", {})
+    if not cfg.get("activo"):
+        return
+    silencio = max(0, int(cfg.get("silencio_minutos", 0) or 0))
+    ultimo = parsea_fecha(estado.get("ultimo_correo"))
+    if silencio and ultimo and ultimo > ahora_cl() - timedelta(minutes=silencio):
+        log(f"Correo omitido por silencio de {silencio} minutos.")
+        return
+    avisos = [r for r in nuevos if r.get("uaf")]
+    if not avisos or len(avisos) < int(cfg.get("minimo_para_avisar", 1)):
+        return
+    destinatarios = cfg.get("destinatarios") or []
+    if not destinatarios:
+        return
+    msg = EmailMessage()
+    msg["Subject"] = f"Monitor UAF Chile: {len(avisos)} nueva(s) mención(es)"
+    msg["From"] = formataddr((cfg.get("remitente_nombre", "Monitor UAF Chile"), cfg.get("usuario", "")))
+    msg["To"] = ", ".join(destinatarios)
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid()
+    lineas = ["Se detectaron nuevas menciones verificadas de la UAF de Chile:", ""]
+    for r in avisos[:25]:
+        lineas += [f"{r.get('fecha_legible')} · {r.get('medio')}", r.get("titulo", ""),
+                   r.get("contexto_uaf") or r.get("resumen", ""), r.get("link", ""), ""]
+    msg.set_content("\n".join(lineas))
+    servidor = cfg.get("servidor")
+    puerto = int(cfg.get("puerto", 587))
+    seguridad = str(cfg.get("seguridad", "starttls")).lower()
+    usuario = cfg.get("usuario", "")
+    clave = cfg.get("clave", "")
+    contexto = ssl.create_default_context()
+    if seguridad == "ssl":
+        with smtplib.SMTP_SSL(servidor, puerto, context=contexto, timeout=30) as smtp:
+            if usuario:
+                smtp.login(usuario, clave)
+            smtp.send_message(msg)
+    else:
+        with smtplib.SMTP(servidor, puerto, timeout=30) as smtp:
+            smtp.ehlo()
+            if seguridad == "starttls":
+                smtp.starttls(context=contexto); smtp.ehlo()
+            if usuario:
+                smtp.login(usuario, clave)
+            smtp.send_message(msg)
+    estado["ultimo_correo"] = ahora_cl().isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Ejecución principal
+# ---------------------------------------------------------------------------
+
+
+def ejecutar(modo: str) -> int:
+    modo = modo.lower()
+    if modo not in {"rapido", "conciliacion"}:
+        raise ValueError("modo debe ser rapido o conciliacion")
     estado = carga_estado()
-    migracion = int(estado.get("esquema", 0)) != ESQUEMA_ID
-    if migracion:
-        log("! cambio de esquema de identificadores: esta corrida no enviará correo")
+    migracion = bool(estado.pop("migracion_pendiente", False))
+    previos = carga_previos()
+    log(f"Inicio motor {VERSION_MONITOR} · modo={modo} · fuentes={len(FUENTES)} · migracion={migracion}")
 
-    previos = carga_datos_previos()
-    cuerpos = indice_cuerpos(previos)
-    log(f"Histórico: {len(previos['prensa'])} registros · caché de cuerpos: {len(cuerpos)}")
+    descubiertos = descubre_agregadores(modo)
+    descubiertos += descubre_directo(modo, estado)
+    candidatos = normaliza_candidatos(descubiertos, modo)
+    candidatos_revision = [c for c in candidatos if debe_revisar(c, estado, modo)]
+    limite = MAX_ENRIQUECER if modo == "rapido" else max(MAX_ENRIQUECER, env_int("MONITOR_MAX_ENRIQUECER_CONCILIACION", 1_100))
+    minimo = MIN_POR_FUENTE if modo == "rapido" else max(6, MIN_POR_FUENTE)
+    seleccion = selecciona_barrido_equilibrado(candidatos_revision, limite, minimo)
+    log(f"Descubiertos={len(descubiertos)} · únicos={len(candidatos)} · a revisar={len(seleccion)}")
 
-    log("Recolectando prensa chilena…")
-    crudos = recolecta_prensa(estado, cuerpos)
-    log("Recolectando señal social pública…")
-    crudos_soc = recolecta_social()
+    enriquecidos: list[dict[str, Any]] = []
+    ex = ThreadPoolExecutor(max_workers=HILOS)
+    futuros = {ex.submit(enriquece_articulo, c): c for c in seleccion}
+    try:
+        for fut in as_completed(futuros):
+            if tiempo_agotado(75):
+                for pendiente in futuros:
+                    pendiente.cancel()
+                break
+            try:
+                enriquecidos.append(fut.result())
+            except Exception as exc:
+                c = futuros[fut]
+                c["estado_extraccion"] = "error_descarga"
+                c["error_enriquecimiento"] = f"{type(exc).__name__}: {exc}"
+                enriquecidos.append(c)
+    finally:
+        ex.shutdown(wait=True, cancel_futures=True)
 
-    if not crudos and not crudos_soc and os.path.exists(SALIDA):
-        log("! ninguna fuente respondió; se conserva el datos.json anterior")
-        guarda_estado(estado)
-        return 0
+    aceptados: list[dict[str, Any]] = []
+    pendientes: list[dict[str, Any]] = []
+    descartes: Counter[str] = Counter()
+    muestras_descartes: list[dict[str, Any]] = []
+    revisado_iso = ahora_cl().isoformat()
+    for r in enriquecidos:
+        rid = id_registro(r.get("link", ""), r.get("titulo", ""))
+        uaf = analiza_uaf(r)[0]
+        pertinente = es_pertinente(r)
+        if pertinente:
+            pub = registro_publicable(r, modo)
+            aceptados.append(pub)
+            estado_val = "aceptado_uaf" if pub.get("uaf") else "aceptado_contexto"
+        else:
+            motivo = razon_descarte(r)
+            estado_val = motivo
+            descartes[motivo] += 1
+            muestra = candidato_pendiente(r, motivo)
+            # Conserva pendientes accionables; no muestra todos los descartes simples.
+            if motivo in {"bloqueado_robots", "cuerpo_insuficiente", "error_descarga", "pendiente_pdf", "uaf_ambigua_o_extranjera"}:
+                pendientes.append(muestra)
+            if len(muestras_descartes) < 100:
+                muestras_descartes.append(muestra)
+        estado["procesados"][rid] = {"revisado": revisado_iso, "estado": estado_val, "url": r.get("link", "")}
 
+    prensa = mezcla_historico(previos.get("prensa", []), aceptados)
     vistos = set(estado.get("vistos", []))
     nuevos = []
+    for r in prensa:
+        if r["id"] not in vistos and r in aceptados:
+            r["nuevo"] = modo == "rapido" and not migracion
+            r["incorporado_conciliacion"] = modo == "conciliacion"
+            r["incorporado_migracion"] = migracion
+            nuevos.append(r)
+            vistos.add(r["id"])
+        else:
+            r["nuevo"] = False
+    estado["vistos"] = list(vistos)
 
-    def procesa(lote, canal):
-        salida, dedup = [], set()
-        for r in lote:
-            if not r.get("fecha_dt"):
-                # Antes se descartaba la noticia. Ahora, si la fuente es chilena y
-                # pertinente, se conserva con fecha estimada al momento del hallazgo
-                # y queda marcada como tal para que el analista lo sepa.
-                if canal == "prensa" and r.get("cuerpo_extraido"):
-                    r["fecha_dt"] = ahora
-                    r["fecha_estimada"] = True
-                else:
-                    continue
-            if r["fecha_dt"] < corte:
-                continue
-            if r["fecha_dt"] > ahora + timedelta(hours=6):
-                continue  # fechas futuras: dato erróneo del medio
-            if not url_http(r.get("link", "")):
-                continue
-            if canal == "prensa" and not es_fuente_chilena(r):
-                continue
-            if not es_pertinente(r):
-                continue
-            clave = id_estable(r["link"], r.get("titulo", ""))
-            if clave in dedup:
-                continue
-            dedup.add(clave)
-            r = clasifica(r)
-            registro = {
-                "id": clave,
-                "canal": canal,
-                "fecha": r["fecha_dt"].strftime("%Y-%m-%d"),
-                "hora": r["fecha_dt"].strftime("%H:%M"),
-                "fecha_iso": r["fecha_dt"].isoformat(),
-                "medio": r.get("medio", "")[:160],
-                "fuente_url": r.get("fuente_url", ""),
-                "url_final": r.get("url_final", ""),
-                "fuente_institucional": bool(r.get("fuente_institucional")),
-                "nivel_fuente": r.get("nivel_fuente", ""),
-                "origen": r.get("origen", ""),
-                "origen_busqueda": str(r.get("origen_busqueda", ""))[:180],
-                "enriquecido": bool(r.get("enriquecido")),
-                "cuerpo_extraido": bool(r.get("cuerpo_extraido")),
-                "texto_enriquecido": str(r.get("texto_enriquecido", ""))[:MAX_TEXTO_GUARDADO],
-                "tipo_medio": r.get("tipo_medio", "otro"),
-                "titulo": r.get("titulo", "")[:500],
-                "resumen": r.get("resumen", "")[:900],
-                "link": r["link"],
-                "fenomeno": r.get("fenomeno", "otro"),
-                "naturaleza": r.get("naturaleza", "analisis"),
-                "precedentes": r.get("precedentes", ["indeterminado"]),
-                "topicos": r.get("topicos", ["otros"]),
-                "sujetos_obligados": r.get("sujetos_obligados", []),
-                "impactos_sujeto": r.get("impactos_sujeto", []),
-                "roles_sujetos": r.get("roles_sujetos", {}),
-                "roles_sujetos_label": r.get("roles_sujetos_label", {}),
-                "uaf": bool(r.get("uaf")),
-                "uaf_chile": bool(r.get("uaf_chile")),
-                "uaf_confianza": r.get("uaf_confianza", "media"),
-                "uaf_motivos": r.get("uaf_motivos", []),
-                "uaf_puntaje": r.get("uaf_puntaje", 0),
-                "uaf_menciones": r.get("uaf_menciones", 0),
-                "contexto_uaf": r.get("contexto_uaf", ""),
-                "plataforma": r.get("plataforma"),
-                "interacciones": int(r.get("interacciones", 0) or 0),
-                "nucleo": bool(r.get("nucleo")),
-                "fecha_estimada": bool(r.get("fecha_estimada")),
-            }
-            etiqueta_registro(registro)
-            if clave not in vistos:
-                registro["nuevo"] = True
-                nuevos.append(registro)
-                vistos.add(clave)
-            salida.append(registro)
-        return salida
+    pendientes_prev = {p.get("id"): p for p in previos.get("candidatos_pendientes", []) if p.get("id")}
+    for p in pendientes:
+        pendientes_prev[p["id"]] = p
+    aceptados_ids = {r["id"] for r in prensa}
+    pendientes_final = [p for i, p in pendientes_prev.items() if i not in aceptados_ids]
+    pendientes_final.sort(key=lambda p: p.get("ultima_revision", ""), reverse=True)
+    pendientes_final = pendientes_final[:500]
 
-    prensa = mezcla_historico(previos.get("prensa", []), procesa(crudos, "prensa"), corte)
-    social = mezcla_historico(previos.get("social", []), procesa(crudos_soc, "social"), corte)
+    ahora = ahora_cl()
+    dias = [(ahora.date() - timedelta(days=i)).isoformat() for i in range(VENTANA_DIAS - 1, -1, -1)]
+    metricas = calcula_metricas(prensa, [], dias, ahora)
+    if modo == "conciliacion":
+        estado["ultima_conciliacion"] = ahora.isoformat()
+    cobertura_fuentes = []
+    for f in FUENTES:
+        reg = _COBERTURA.get(f["dominio"], {
+            "fuente": f["nombre"], "dominio": f["dominio"], "canales": {}, "resultados": 0,
+            "errores": ["no consultada en esta corrida"], "consultada": False,
+        })
+        reg = dict(reg)
+        reg["obligatoria"] = f["dominio"] in DOMINIOS_MINIMOS
+        reg["tipo"] = f["tipo"]
+        reg["prioridad"] = f["prioridad"]
+        cobertura_fuentes.append(reg)
 
-    metricas = calcula_metricas(prensa, social, dias, ahora)
     salida = {
-        "generado": ahora.isoformat(),
-        "generado_legible": ahora.strftime("%d/%m/%Y %H:%M"),
-        "version_motor": VERSION_MONITOR,
+        "generado": ahora.isoformat(), "generado_legible": ahora.strftime("%d/%m/%Y %H:%M"),
+        "version_motor": VERSION_MONITOR, "modo_ejecucion": modo,
         "ventana": {"dias": dias, "hoy": ahora.strftime("%Y-%m-%d"), "largo": VENTANA_DIAS},
-        "metricas": metricas,
-        "prensa": prensa,
-        "social": social,
-        "nuevos": len(nuevos),
-        "consultas": (len(CONSULTAS_PRENSA) + len(CONSULTAS_BING) + len(CONSULTAS_GDELT)
-                      + len(MEDIOS_CHILE) + len(CONSULTAS_SOCIALES) * (len(SUBREDDITS) + 1)),
+        "metricas": metricas, "prensa": prensa, "social": [], "nuevos": len([x for x in nuevos if x.get("nuevo")]),
+        "consultas": len(CONSULTAS_UAF) + len(CONSULTAS_CONTEXTO) + len(consultas_site(modo)),
+        "candidatos_pendientes": pendientes_final,
+        "descartes_resumen": dict(descartes), "muestras_descartes": muestras_descartes,
+        "cobertura_fuentes": cobertura_fuentes,
+        "auditoria": {
+            "modo": modo, "urls_descubiertas": len(descubiertos), "urls_unicas": len(candidatos),
+            "urls_revisadas": len(enriquecidos), "aceptadas_corrida": len(aceptados),
+            "menciones_uaf_corrida": sum(1 for r in aceptados if r.get("uaf")),
+            "contexto_laft_corrida": sum(1 for r in aceptados if not r.get("uaf")),
+            "pendientes_corrida": len(pendientes), "descartadas_corrida": sum(descartes.values()),
+            "fuentes_configuradas": len(FUENTES), "fuentes_consultadas": sum(1 for x in cobertura_fuentes if x.get("consultada")),
+            "ultima_conciliacion": estado.get("ultima_conciliacion"), "migracion_estado": migracion,
+        },
         "cobertura_tecnica": {
             "cuerpos_extraidos": sum(1 for r in prensa if r.get("cuerpo_extraido")),
             "fuentes_institucionales": sum(1 for r in prensa if r.get("fuente_institucional")),
-            "solo_fuentes_chilenas": True,
-            "medios_en_lista_blanca": len(DOMINIOS_CHILENOS),
-            "dominios_con_feed": sum(1 for v in (estado.get("endpoints") or {}).values()
-                                     if v.get("feeds")),
-            "dominios_con_sitemap": sum(1 for v in (estado.get("endpoints") or {}).values()
-                                        if v.get("sitemaps")),
-            "articulos_en_memoria": len(estado.get("procesados") or {}),
-            "dominios_con_hallazgos": len(INFORME_COBERTURA),
-            "respeta_robots": RESPETA_ROBOTS,
-            "segundos_corrida": round(time.monotonic() - _INICIO, 1),
+            "menciones_uaf_solo_cuerpo": sum(1 for r in prensa if r.get("uaf") and r.get("origen_mencion_uaf") == "cuerpo"),
+            "solo_fuentes_chilenas": True, "medios_en_lista_blanca": len(DOMINIOS_CHILENOS),
+            "fuentes_minimas_configuradas": len(DOMINIOS_MINIMOS),
+            "fuentes_minimas_consultadas": sum(1 for h in DOMINIOS_MINIMOS if _COBERTURA.get(h, {}).get("consultada")),
+            "articulos_en_memoria": len(estado.get("procesados", {})), "respeta_robots": RESPETA_ROBOTS,
+            "retencion_procesados_dias": RETENCION_PROCESADOS_DIAS,
+            "segundos_corrida": round(time.monotonic() - INICIO, 1),
         },
     }
-
-    # Auditoría de cobertura: cuántas noticias aportó cada dominio y cuáles
-    # de los medios de la lista no entregaron nada en esta corrida.
-    publicadas = {}
-    for r in prensa:
-        host = dominio_url(r.get("link", "")) or dominio_url(r.get("fuente_url", ""))
-        fila = publicadas.setdefault(host, {"total": 0, "uaf": 0})
-        fila["total"] += 1
-        if r.get("uaf"):
-            fila["uaf"] += 1
-    cobertura_medios = []
-    for host in dict.fromkeys(DOMINIOS_BUSQUEDA_SITIO + sorted(publicadas)):
-        endpoints = (estado.get("endpoints", {}) or {}).get(host, {})
-        pub = publicadas.get(host, {})
-        cand = INFORME_COBERTURA.get(host, {})
-        cobertura_medios.append({
-            "medio": NOMBRE_POR_DOMINIO.get(host, host),
-            "dominio": host,
-            "prioritario": host in DOMINIOS_BUSQUEDA_SITIO,
-            "candidatos": cand.get("candidatos", 0),
-            "canales": sorted((cand.get("canales") or {}).keys()),
-            "publicadas_30d": pub.get("total", 0),
-            "uaf_30d": pub.get("uaf", 0),
-            "feed": bool(endpoints.get("feeds")),
-            "sitemap": bool(endpoints.get("sitemaps")),
-        })
-    cobertura_medios.sort(key=lambda x: (-x["publicadas_30d"], -x["candidatos"], x["dominio"]))
-    salida["cobertura_medios"] = cobertura_medios
-
-    silenciosos = [c["dominio"] for c in cobertura_medios
-                   if c["prioritario"] and not c["candidatos"] and not c["publicadas_30d"]]
-    if silenciosos:
-        log(f"  ! sin hallazgos en esta corrida ({len(silenciosos)}): {', '.join(silenciosos[:22])}")
-    sin_via = [c["dominio"] for c in cobertura_medios
-               if c["prioritario"] and not c["feed"] and not c["sitemap"]]
-    if sin_via:
-        log(f"  · sin feed ni sitemap propio, dependen de buscadores ({len(sin_via)}): "
-            f"{', '.join(sin_via[:22])}")
-
-    temporal = SALIDA + ".tmp"
-    with open(temporal, "w", encoding="utf-8") as fh:
-        json.dump(salida, fh, ensure_ascii=False, indent=1)
+    temporal = SALIDA.with_suffix(".tmp")
+    temporal.write_text(json.dumps(salida, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(temporal, SALIDA)
-
-    estado["vistos"] = list(vistos)
-    log(f"Listo: {len(prensa)} de prensa · {len(social)} sociales · {len(nuevos)} nuevas · "
-        f"{salida['cobertura_tecnica']['segundos_corrida']}s → {SALIDA}")
-    for n in nuevos[:12]:
-        log(f"   NUEVA [{n['canal']}] {n['medio']} — {n['titulo'][:88]}")
-
-    if nuevos and not migracion:
-        envia_correo(carga_config(), nuevos, metricas, estado)
+    if not migracion:
+        envia_correo(nuevos, estado, modo)
+    else:
+        log("Migración de esquema: se suprimen correos en esta corrida.")
     guarda_estado(estado)
+    log(f"Listo: {len(prensa)} publicaciones · {len(nuevos)} incorporadas · {len(pendientes_final)} pendientes · {salida['cobertura_tecnica']['segundos_corrida']}s")
     return len(nuevos)
 
 
-def diagnostico():
-    estado = carga_estado()
-    log(f"Diagnóstico de {len(MEDIOS_CHILE)} dominios (puede tardar varios minutos).")
-    filas = []
-    lock = threading.Lock()
-
-    def revisa(host, tipo, prio):
-        local = {"endpoints": {}}
-        info = descubre_endpoints(host, local)
-        with lock:
-            estado.setdefault("endpoints", {})[host] = info
-            filas.append((host, tipo, prio, len(info.get("feeds", [])),
-                          len(info.get("sitemaps", []))))
-        return []
-
-    en_paralelo([lambda h=h, t=t, p=pr: revisa(h, t, p)
-                 for _, h, t, pr in MEDIOS_CHILE], "diagnóstico")
-    filas.sort(key=lambda f: (f[3] + f[4], f[0]))
-    log("  dominio                              feeds sitemaps  vía")
-    for host, tipo, prio, nf, ns in filas:
-        via = "feed/sitemap" if (nf or ns) else ("buscadores" if prio else "sin vía propia")
-        log(f"  {host:36s} {nf:5d} {ns:8d}  {via} ({tipo})")
-    sin_via = [f[0] for f in filas if not f[3] and not f[4]]
-    log(f"Resumen: {len(filas) - len(sin_via)}/{len(filas)} dominios con feed o sitemap propio.")
-    log(f"Los {len(sin_via)} restantes se cubren con consultas site: en Google News y Bing.")
-    guarda_estado(estado)
+# ---------------------------------------------------------------------------
+# Diagnóstico y CLI
+# ---------------------------------------------------------------------------
 
 
-def probar_deteccion(texto, medio="La Tercera", link="https://www.latercera.com/prueba"):
-    reg = {"titulo": texto[:200], "resumen": "", "texto_enriquecido": texto,
-           "medio": medio, "link": link, "fuente_url": f"https://{dominio_url(link)}"}
-    uaf, confianza, motivos, puntaje, menciones = analiza_uaf(reg)
+def validar_fuentes_config() -> int:
+    faltantes = [h for h in DOMINIOS_MINIMOS if h not in DOMINIOS_CHILENOS]
+    duplicados = [d for d, n in Counter(f["dominio"] for f in FUENTES).items() if n > 1]
     print(json.dumps({
-        "uaf_chile": uaf, "confianza": confianza, "puntaje": puntaje,
-        "menciones_utiles": menciones, "motivos": motivos,
-        "pertinente": es_pertinente(reg),
-        "contexto": extrae_contexto_uaf(reg)[:300],
+        "version": VERSION_MONITOR, "fuentes_configuradas": len(FUENTES), "fuentes_minimas": len(DOMINIOS_MINIMOS),
+        "faltantes_en_catalogo": faltantes, "duplicados": duplicados,
+        "nuevas_fuentes_institucionales": [x for x in ("aduana.cl", "tgr.gob.cl", "spensiones.cl", "scj.gob.cl", "estrategiaantilavado.cl") if x in DOMINIOS_CHILENOS],
+        "retencion_procesados_dias": RETENCION_PROCESADOS_DIAS,
+    }, ensure_ascii=False, indent=2))
+    return 1 if faltantes or duplicados else 0
+
+
+def evalua_url(url: str) -> dict[str, Any]:
+    host = dominio_url(url)
+    f = fuente_para_host(host) or {"nombre": host, "tipo": "otro", "oficial": False}
+    reg = {"titulo": "", "resumen": "", "link": url, "medio": f["nombre"], "fuente_url": f"https://{host}",
+           "tipo_fuente": f.get("tipo"), "fuente_institucional": f.get("oficial"), "origen_busqueda": "prueba_url"}
+    r = enriquece_articulo(reg)
+    uaf, confianza, motivos, puntaje, menciones = analiza_uaf(r)
+    return {
+        "url": url, "url_final": r.get("link"), "titulo": r.get("titulo"),
+        "cuerpo_extraido": r.get("cuerpo_extraido"), "estado_extraccion": r.get("estado_extraccion"),
+        "fecha": r.get("fecha_dt").isoformat() if r.get("fecha_dt") else None,
+        "uaf_chile": uaf, "confianza": confianza, "puntaje": puntaje, "menciones": menciones,
+        "motivos": motivos, "pertinente": es_pertinente(r), "contexto": extrae_contexto_uaf(r),
+        "error": r.get("error_enriquecimiento"),
+    }
+
+
+def probar_url(url: str) -> None:
+    print(json.dumps(evalua_url(url), ensure_ascii=False, indent=2))
+
+
+def probar_casos_control() -> int:
+    datos = carga_json(CASOS_CONTROL_ARCHIVO, {"casos": []})
+    casos = datos.get("casos", []) if isinstance(datos, dict) else []
+    resultados = []
+    fallos = 0
+    for caso in casos:
+        url = caso.get("url", "")
+        if not url:
+            continue
+        resultado = evalua_url(url)
+        esperado = bool(caso.get("espera_uaf", True))
+        resultado["nombre_control"] = caso.get("nombre", url)
+        resultado["espera_uaf"] = esperado
+        resultado["cumple"] = resultado.get("uaf_chile") is esperado
+        if not resultado["cumple"]:
+            fallos += 1
+        resultados.append(resultado)
+    print(json.dumps({"version": VERSION_MONITOR, "casos": len(resultados), "fallos": fallos,
+                      "resultados": resultados}, ensure_ascii=False, indent=2))
+    return 1 if fallos else 0
+
+
+def probar_deteccion(texto: str, medio: str = "Medio chileno", link: str = "https://www.df.cl/prueba") -> None:
+    reg = {"titulo": texto[:200], "resumen": "", "texto_enriquecido": texto, "medio": medio, "link": link}
+    uaf, confianza, motivos, puntaje, menciones = analiza_uaf(reg)
+    print(json.dumps({"uaf_chile": uaf, "confianza": confianza, "puntaje": puntaje,
+                      "menciones": menciones, "motivos": motivos, "pertinente": es_pertinente(reg),
+                      "contexto": extrae_contexto_uaf(reg)}, ensure_ascii=False, indent=2))
+
+
+def diagnostico() -> None:
+    print(json.dumps({
+        "version": VERSION_MONITOR, "fuentes": len(FUENTES), "modo_recomendado": "conciliacion",
+        "presupuesto_segundos": PRESUPUESTO_SEGUNDOS, "max_enriquecer": MAX_ENRIQUECER,
+        "fuentes_por_tipo": dict(Counter(f["tipo"] for f in FUENTES)),
+        "fuentes": [{"nombre": f["nombre"], "dominio": f["dominio"], "tipo": f["tipo"],
+                     "feeds": len(f.get("feeds", [])), "sitemaps": len(f.get("sitemaps", [])),
+                     "secciones": len(f.get("secciones", []))} for f in FUENTES],
     }, ensure_ascii=False, indent=2))
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Monitor UAF Chile · vigilancia de fuentes")
-    ap.add_argument("--daemon", action="store_true", help="vigila en bucle")
-    ap.add_argument("--intervalo", type=int, default=15, help="minutos entre pasadas")
-    ap.add_argument("--probar-correo", action="store_true", help="envía un correo de prueba")
-    ap.add_argument("--diagnostico", action="store_true", help="descubre fuentes y sale")
-    ap.add_argument("--probar-deteccion", metavar="TEXTO", help="evalúa el motor UAF sobre un texto")
+def prueba_correo() -> None:
+    ahora = ahora_cl()
+    muestra = {"uaf": True, "fecha_legible": ahora.strftime("%d/%m/%Y"), "medio": "Prueba técnica",
+               "titulo": "Correo de prueba del Monitor UAF Chile", "contexto_uaf": "Configuración SMTP operativa.",
+               "resumen": "", "link": "https://www.uaf.cl/"}
+    estado = carga_estado()
+    envia_correo([muestra], estado, "rapido")
+    guarda_estado(estado)
+    print("Prueba de correo ejecutada.")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Monitor UAF Chile v7")
+    ap.add_argument("--modo", choices=["rapido", "conciliacion"], default=MODO_ENV)
+    ap.add_argument("--validar-fuentes", action="store_true")
+    ap.add_argument("--probar-url", metavar="URL")
+    ap.add_argument("--probar-deteccion", metavar="TEXTO")
+    ap.add_argument("--probar-casos-control", action="store_true")
+    ap.add_argument("--diagnostico", action="store_true")
+    ap.add_argument("--probar-correo", action="store_true")
     args = ap.parse_args()
-
-    if args.probar_correo:
-        prueba_correo()
-        return
+    if args.validar_fuentes:
+        raise SystemExit(validar_fuentes_config())
+    if args.probar_url:
+        probar_url(args.probar_url); return
     if args.probar_deteccion:
-        probar_deteccion(args.probar_deteccion)
-        return
+        probar_deteccion(args.probar_deteccion); return
+    if args.probar_casos_control:
+        raise SystemExit(probar_casos_control())
     if args.diagnostico:
-        diagnostico()
-        return
-
+        diagnostico(); return
+    if args.probar_correo:
+        prueba_correo(); return
     carga_config()
-    if not args.daemon:
-        pasada()
-        return
-
-    log(f"Vigilancia activa · cada {args.intervalo} min · Ctrl+C para detener")
-    while True:
-        global _INICIO
-        _INICIO = time.monotonic()
-        try:
-            pasada()
-        except KeyboardInterrupt:
-            log("Detenido.")
-            return
-        except Exception as e:  # noqa: BLE001
-            log(f"! error en la pasada: {type(e).__name__}: {e}")
-        time.sleep(max(60, args.intervalo * 60))
+    ejecutar(args.modo)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,93 @@
+{
+  "descripcion": "Catálogo editable de fuentes. Los registros reemplazan o amplían el catálogo incorporado en monitor_uaf.py.",
+  "fuentes": [
+    {
+      "nombre": "Unidad de Análisis Financiero",
+      "dominio": "uaf.cl",
+      "tipo": "institucional",
+      "prioridad": 10,
+      "oficial": true,
+      "secciones": ["https://www.uaf.cl/es-cl/noticias"]
+    },
+    {
+      "nombre": "Estrategia Antilavado",
+      "dominio": "estrategiaantilavado.cl",
+      "tipo": "institucional",
+      "prioridad": 10,
+      "oficial": true,
+      "secciones": ["https://www.estrategiaantilavado.cl/es-cl/lista-noticia/"]
+    },
+    {
+      "nombre": "Servicio Nacional de Aduanas",
+      "dominio": "aduana.cl",
+      "tipo": "institucional",
+      "prioridad": 9,
+      "oficial": true,
+      "secciones": ["https://www.aduana.cl/noticias/aduana/2012-04-10/131546.html"]
+    },
+    {
+      "nombre": "Tesorería General de la República",
+      "dominio": "tgr.gob.cl",
+      "tipo": "institucional",
+      "prioridad": 8,
+      "oficial": true,
+      "secciones": ["https://www.tgr.gob.cl/noticias/"]
+    },
+    {
+      "nombre": "Superintendencia de Pensiones",
+      "dominio": "spensiones.cl",
+      "tipo": "institucional",
+      "prioridad": 8,
+      "oficial": true,
+      "secciones": ["https://www.spensiones.cl/portal/institucional/594/w3-propertyvalue-5936.html"]
+    },
+    {
+      "nombre": "Superintendencia de Casinos de Juego",
+      "dominio": "scj.gob.cl",
+      "tipo": "institucional",
+      "prioridad": 9,
+      "oficial": true,
+      "secciones": ["https://www.scj.gob.cl/noticias_scj/", "https://www.scj.gob.cl/noticias/"]
+    },
+    {
+      "nombre": "Reporte Minero",
+      "dominio": "reporteminero.cl",
+      "tipo": "sectorial",
+      "prioridad": 6,
+      "oficial": false,
+      "secciones": ["https://www.reporteminero.cl/"]
+    },
+    {
+      "nombre": "ANFACH",
+      "dominio": "anfach.cl",
+      "tipo": "gremial",
+      "prioridad": 6,
+      "oficial": false,
+      "secciones": ["https://www.anfach.cl/gremio/"]
+    },
+    {
+      "nombre": "Canal 9",
+      "dominio": "canal9.cl",
+      "tipo": "regional",
+      "prioridad": 5,
+      "oficial": false,
+      "secciones": ["https://www.canal9.cl/"]
+    },
+    {
+      "nombre": "El América",
+      "dominio": "elamerica.cl",
+      "tipo": "regional",
+      "prioridad": 5,
+      "oficial": false,
+      "secciones": ["https://elamerica.cl/"]
+    },
+    {
+      "nombre": "EnLaLinea.cl",
+      "dominio": "enlalinea.cl",
+      "tipo": "regional",
+      "prioridad": 5,
+      "oficial": false,
+      "secciones": ["https://www.enlalinea.cl/"]
+    }
+  ]
+}

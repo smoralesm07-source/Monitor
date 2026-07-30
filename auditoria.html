@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Auditoría de cobertura · Monitor UAF Chile</title>
+<style>
+:root{--azul:#12304a;--azul2:#1c526f;--turq:#197b86;--fondo:#f3f6f8;--borde:#d7e0e5;--texto:#17242d;--muted:#62727d;--ok:#26734d;--warn:#9a6700;--bad:#a33a3a}
+*{box-sizing:border-box}body{margin:0;background:var(--fondo);color:var(--texto);font-family:Inter,system-ui,-apple-system,Segoe UI,Arial,sans-serif}header{background:linear-gradient(120deg,var(--azul),var(--azul2));color:white;padding:24px max(24px,5vw)}header h1{margin:0 0 6px;font-size:26px}header p{margin:0;color:#d8e8f0}.wrap{max-width:1500px;margin:auto;padding:24px}.nav{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:18px}.nav a{color:var(--azul2);font-weight:700;text-decoration:none}.stamp{font-size:13px;color:var(--muted)}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card,.panel{background:white;border:1px solid var(--borde);border-radius:12px;box-shadow:0 2px 8px #12304a0c}.card{padding:16px}.card span{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.card b{display:block;font-size:30px;margin-top:6px;color:var(--azul)}.panel{margin-top:18px;padding:18px}.panel h2{margin:0 0 6px;font-size:18px}.panel .sub{color:var(--muted);font-size:13px;margin-bottom:14px}.controls{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}.controls input,.controls select{padding:9px 10px;border:1px solid var(--borde);border-radius:8px;background:white;min-width:180px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px;border-bottom:1px solid #e8edef;vertical-align:top}th{position:sticky;top:0;background:#f8fafb;color:#40515c;font-size:11px;text-transform:uppercase;letter-spacing:.05em}.tablebox{overflow:auto;max-height:560px;border:1px solid var(--borde);border-radius:9px}.pill{display:inline-block;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:700;background:#e8eef2;color:#42525d}.pill.ok{background:#dff2e8;color:var(--ok)}.pill.warn{background:#fff0c9;color:var(--warn)}.pill.bad{background:#fae2e2;color:var(--bad)}a.link{color:var(--azul2);text-decoration:none;font-weight:650}.error{color:var(--bad);font-size:12px;max-width:350px}.empty{padding:26px;text-align:center;color:var(--muted)}.bar{height:8px;background:#e8eef2;border-radius:999px;overflow:hidden;min-width:100px}.bar i{display:block;height:100%;background:var(--turq)}footer{padding:30px;text-align:center;color:var(--muted);font-size:12px}@media(max-width:760px){.wrap{padding:14px}th,td{padding:8px}.nav{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<header><h1>Auditoría de cobertura</h1><p>Fuentes consultadas, candidatos pendientes y motivos de descarte del Monitor UAF Chile.</p></header>
+<main class="wrap">
+  <div class="nav"><a href="index.html">← Volver al dashboard</a><span class="stamp" id="stamp">Cargando datos…</span></div>
+  <section class="cards" id="cards"></section>
+
+  <section class="panel">
+    <h2>Cobertura por fuente</h2><div class="sub">Permite distinguir una fuente configurada de una fuente efectivamente consultada en la última corrida.</div>
+    <div class="controls"><input id="qFuente" placeholder="Buscar fuente o dominio"><select id="fEstado"><option value="">Todas</option><option value="consultada">Consultadas</option><option value="no">No consultadas</option><option value="error">Con errores</option></select></div>
+    <div class="tablebox"><table><thead><tr><th>Fuente</th><th>Tipo</th><th>Estado</th><th>Canales</th><th>Resultados</th><th>Errores</th></tr></thead><tbody id="fuentes"></tbody></table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Candidatos pendientes</h2><div class="sub">Artículos potencialmente relevantes que requieren nueva extracción o validación manual.</div>
+    <div class="controls"><input id="qPend" placeholder="Buscar título, medio o motivo"><select id="fMotivo"><option value="">Todos los motivos</option></select></div>
+    <div class="tablebox"><table><thead><tr><th>Fecha</th><th>Medio</th><th>Título</th><th>Motivo</th><th>Evidencia</th></tr></thead><tbody id="pendientes"></tbody></table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Resumen de descartes</h2><div class="sub">Conteo de exclusiones producido exclusivamente en la última ejecución.</div>
+    <div id="descartes"></div>
+  </section>
+</main>
+<footer>Monitor automatizado de fuentes públicas. La auditoría técnica no reemplaza la validación analítica de una publicación.</footer>
+<script>
+let D={};const $=id=>document.getElementById(id);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const safe=u=>{try{const x=new URL(u,location.href);return ['http:','https:'].includes(x.protocol)?x.href:'#'}catch{return '#'}};
+function cards(){const a=D.auditoria||{},c=D.cobertura_tecnica||{};const vals=[['Modo',D.modo_ejecucion||'—'],['URLs descubiertas',a.urls_descubiertas||0],['URLs revisadas',a.urls_revisadas||0],['Menciones UAF',a.menciones_uaf_corrida||0],['Contexto LA/FT',a.contexto_laft_corrida||0],['Pendientes',D.candidatos_pendientes?.length||0],['Fuentes consultadas',`${a.fuentes_consultadas||0}/${a.fuentes_configuradas||0}`],['Menciones solo en cuerpo',c.menciones_uaf_solo_cuerpo||0]];$('cards').innerHTML=vals.map(([k,v])=>`<article class="card"><span>${esc(k)}</span><b>${esc(v)}</b></article>`).join('')}
+function renderFuentes(){const q=$('qFuente').value.toLowerCase(),f=$('fEstado').value;let rs=(D.cobertura_fuentes||[]).filter(r=>{const hay=(r.fuente+' '+r.dominio).toLowerCase().includes(q);const e=(r.errores||[]).length>0;return hay&&(!f||(f==='consultada'&&r.consultada)||(f==='no'&&!r.consultada)||(f==='error'&&e))});$('fuentes').innerHTML=rs.length?rs.map(r=>{const cls=r.consultada?'ok':'warn';const canals=Object.entries(r.canales||{}).map(([k,v])=>`${esc(k)} (${v})`).join(', ')||'—';return `<tr><td><b>${esc(r.fuente)}</b><br><small>${esc(r.dominio)}</small></td><td>${esc(r.tipo||'')}</td><td><span class="pill ${cls}">${r.consultada?'Consultada':'No consultada'}</span></td><td>${canals}</td><td>${r.resultados||0}</td><td class="error">${esc((r.errores||[]).join(' · '))}</td></tr>`}).join(''):`<tr><td colspan="6" class="empty">Sin fuentes para el filtro.</td></tr>`}
+function motivos(){const ms=[...new Set((D.candidatos_pendientes||[]).map(x=>x.motivo).filter(Boolean))].sort();$('fMotivo').innerHTML='<option value="">Todos los motivos</option>'+ms.map(x=>`<option>${esc(x)}</option>`).join('')}
+function renderPend(){const q=$('qPend').value.toLowerCase(),m=$('fMotivo').value;const rs=(D.candidatos_pendientes||[]).filter(r=>[r.titulo,r.medio,r.motivo,r.evidencia].join(' ').toLowerCase().includes(q)&&(!m||r.motivo===m));$('pendientes').innerHTML=rs.length?rs.map(r=>`<tr><td>${esc(r.fecha)}</td><td>${esc(r.medio)}</td><td><a class="link" href="${safe(r.link)}" target="_blank" rel="noopener">${esc(r.titulo)}</a></td><td><span class="pill warn">${esc(r.motivo)}</span></td><td>${esc(r.evidencia||'')}</td></tr>`).join(''):`<tr><td colspan="5" class="empty">No hay candidatos pendientes para el filtro.</td></tr>`}
+function renderDesc(){const d=D.descartes_resumen||{},entries=Object.entries(d).sort((a,b)=>b[1]-a[1]),max=Math.max(1,...entries.map(x=>x[1]));$('descartes').innerHTML=entries.length?`<table><thead><tr><th>Motivo</th><th>Cantidad</th><th>Proporción</th></tr></thead><tbody>${entries.map(([k,n])=>`<tr><td>${esc(k)}</td><td>${n}</td><td><div class="bar"><i style="width:${n/max*100}%"></i></div></td></tr>`).join('')}</tbody></table>`:'<div class="empty">La última ejecución no registró descartes.</div>'}
+async function load(){try{const r=await fetch(`datos.json?t=${Date.now()}`,{cache:'no-store'});if(!r.ok)throw Error(r.status);D=await r.json();$('stamp').textContent=`Corte ${D.generado_legible||''} · ${D.version_motor||''}`;cards();motivos();renderFuentes();renderPend();renderDesc()}catch(e){$('stamp').textContent='No fue posible cargar datos.json';$('cards').innerHTML='<article class="card"><span>Error</span><b>Sin datos</b></article>'}}
+['qFuente','fEstado'].forEach(id=>$(id).addEventListener('input',renderFuentes));['qPend','fMotivo'].forEach(id=>$(id).addEventListener('input',renderPend));load();
+</script>
+</body>
+</html>

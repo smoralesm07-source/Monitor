@@ -1,0 +1,20 @@
+Monitor UAF Chile v7.0
+
+ARCHIVOS PARA SUBIR
+- monitor_uaf.py
+- construye_sitio.py
+- fuentes_uaf.json
+- casos_control.json
+- auditoria.html
+- test_monitor.py
+- .gitignore
+- .github/workflows/monitor.yml
+
+DOCUMENTACIÓN
+- README.md
+- INSTRUCCIONES_SUBIDA.txt
+- CHANGELOG_V7.md
+
+NO INCLUIDO
+- index.html: se conserva el dashboard actualmente publicado.
+- datos.json y .monitor_estado.json: se recuperan desde la rama monitor-state.

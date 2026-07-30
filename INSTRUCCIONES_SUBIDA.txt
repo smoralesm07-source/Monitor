@@ -1,0 +1,12 @@
+ACTUALIZACIÓN MONITOR UAF CHILE v7
+
+1. Conserva tu index.html actual.
+2. Sube a la raíz: monitor_uaf.py, construye_sitio.py, fuentes_uaf.json,
+   casos_control.json, auditoria.html, test_monitor.py y .gitignore.
+3. Reemplaza el workflow por .github/workflows/monitor.yml.
+4. Elimina workflows antiguos de actualización para evitar dobles ejecuciones.
+5. En Actions ejecuta manualmente el modo "conciliacion".
+6. Cuando termine, revisa /auditoria.html y confirma la versión
+   7.0-doble-motor-conciliacion.
+
+Los secretos de correo no cambian.
