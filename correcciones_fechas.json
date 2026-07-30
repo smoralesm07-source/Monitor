@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "descripcion": "Correcciones auditables de fechas de publicación comprobadas manualmente.",
+  "correcciones": [
+    {
+      "link": "https://www.hacienda.cl/noticias-y-eventos/noticias/d349ae50daa96",
+      "fecha": "2026-03-06",
+      "motivo": "La página muestra 'Marzo 6, 2026'; versiones anteriores asignaron erróneamente la fecha de ejecución al no interpretar el mes en español.",
+      "fuente": "Ministerio de Hacienda"
+    }
+  ]
+}

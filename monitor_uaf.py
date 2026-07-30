@@ -94,9 +94,10 @@ FUENTES_ARCHIVO = BASE / "fuentes_uaf.json"
 CASOS_CONTROL_ARCHIVO = BASE / "casos_control.json"
 SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
 EXCLUSIONES_EDITORIALES_ARCHIVO = BASE / "exclusiones_editoriales.json"
+CORRECCIONES_FECHAS_ARCHIVO = BASE / "correcciones_fechas.json"
 
-VERSION_MONITOR = "8.2.1-foco-24h-fenomenos-dinamicos"
-ESQUEMA_ESTADO = 9
+VERSION_MONITOR = "8.2.2-fechas-publicacion-confiables"
+ESQUEMA_ESTADO = 10
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 UA = "Mozilla/5.0 (compatible; MonitorUAF/8.2; +https://github.com/)"
 UA_ROBOTS = "MonitorUAF"
@@ -634,40 +635,133 @@ def ahora_cl() -> datetime:
     return datetime.now(TZ_CL)
 
 
-def parsea_fecha(valor: Any, url: str = "") -> datetime | None:
+MESES_ES = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+    "noviembre": 11, "diciembre": 12,
+}
+
+
+def parsea_fecha_valor(valor: Any) -> datetime | None:
+    """Interpreta una fecha explícita sin inferirla desde la URL.
+
+    Incluye formatos ISO/RFC y formatos editoriales habituales en Chile, por
+    ejemplo ``Marzo 6, 2026`` y ``6 de marzo de 2026``.
+    """
     if isinstance(valor, datetime):
         return valor.astimezone(TZ_CL) if valor.tzinfo else valor.replace(tzinfo=TZ_CL)
+    if isinstance(valor, date):
+        return datetime(valor.year, valor.month, valor.day, tzinfo=TZ_CL)
     s = limpia_texto(valor)
-    if s:
-        try:
-            d = email.utils.parsedate_to_datetime(s)
-            if d:
-                return d.astimezone(TZ_CL) if d.tzinfo else d.replace(tzinfo=TZ_CL)
-        except Exception:
-            pass
-        s2 = s.replace("Z", "+00:00")
-        try:
-            d = datetime.fromisoformat(s2)
+    if not s:
+        return None
+    try:
+        d = email.utils.parsedate_to_datetime(s)
+        if d:
             return d.astimezone(TZ_CL) if d.tzinfo else d.replace(tzinfo=TZ_CL)
-        except Exception:
-            pass
-        for formato in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
-            try:
-                return datetime.strptime(s[:10], formato).replace(tzinfo=TZ_CL)
-            except ValueError:
-                continue
+    except Exception:
+        pass
+    s2 = s.replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(s2)
+        return d.astimezone(TZ_CL) if d.tzinfo else d.replace(tzinfo=TZ_CL)
+    except Exception:
+        pass
+    for formato in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(s[:19] if "%H" in formato else s[:10], formato).replace(tzinfo=TZ_CL)
+        except ValueError:
+            continue
+
+    n = normaliza(s)
+    patrones_es = (
+        r"\b(" + "|".join(MESES_ES) + r")\s+(\d{1,2})(?:,|\s)+\s*(20\d{2})\b",
+        r"\b(\d{1,2})\s+de\s+(" + "|".join(MESES_ES) + r")\s+de\s+(20\d{2})\b",
+        r"\b(\d{1,2})\s+(" + "|".join(MESES_ES) + r")\s+(20\d{2})\b",
+    )
+    for i, patron in enumerate(patrones_es):
+        m = re.search(patron, n)
+        if not m:
+            continue
+        try:
+            if i == 0:
+                mes, dia, anio = m.group(1), int(m.group(2)), int(m.group(3))
+            else:
+                dia, mes, anio = int(m.group(1)), m.group(2), int(m.group(3))
+            return datetime(anio, MESES_ES[mes], dia, tzinfo=TZ_CL)
+        except (ValueError, KeyError):
+            continue
+    return None
+
+
+def parsea_fecha_url(url: str) -> datetime | None:
     patrones = [
         r"/(20\d{2})/(0?[1-9]|1[0-2])/(0?[1-9]|[12]\d|3[01])(?:/|$)",
         r"[-_/](20\d{2})[-_/](0?[1-9]|1[0-2])[-_/](0?[1-9]|[12]\d|3[01])(?:[-_/]|$)",
     ]
     for patron in patrones:
-        m = re.search(patron, url)
+        m = re.search(patron, url or "")
         if m:
             try:
                 return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=TZ_CL)
             except ValueError:
                 pass
     return None
+
+
+def parsea_fecha(valor: Any, url: str = "") -> datetime | None:
+    return parsea_fecha_valor(valor) or parsea_fecha_url(url)
+
+
+def extrae_fecha_visible_html(texto_html: str) -> datetime | None:
+    """Busca una fecha editorial visible al inicio del documento.
+
+    Se usa solo después de agotar metadatos y etiquetas ``time``. El recorte
+    inicial reduce el riesgo de tomar fechas históricas citadas dentro del
+    cuerpo del artículo.
+    """
+    fragmento = texto_html[:160_000]
+    fragmento = re.sub(r"(?is)<script\b[^>]*>.*?</script>|<style\b[^>]*>.*?</style>", " ", fragmento)
+    visible = html_mod.unescape(re.sub(r"(?s)<[^>]+>", " ", fragmento))
+    visible = re.sub(r"\s+", " ", visible)
+    n = normaliza(visible)
+    patrones = (
+        r"\b(?:fecha\s+de\s+publicacion|publicado|actualizado)?\s*:?[ ]*(" + "|".join(MESES_ES) + r")\s+(\d{1,2})(?:,|\s)+\s*(20\d{2})\b",
+        r"\b(?:fecha\s+de\s+publicacion|publicado|actualizado)?\s*:?[ ]*(\d{1,2})\s+de\s+(" + "|".join(MESES_ES) + r")\s+de\s+(20\d{2})\b",
+    )
+    for i, patron in enumerate(patrones):
+        m = re.search(patron, n)
+        if not m:
+            continue
+        valor = f"{m.group(1)} {m.group(2)}, {m.group(3)}" if i == 0 else f"{m.group(1)} de {m.group(2)} de {m.group(3)}"
+        d = parsea_fecha_valor(valor)
+        if d:
+            return d
+    return None
+
+
+@lru_cache(maxsize=1)
+def carga_correcciones_fechas() -> dict[str, datetime]:
+    correcciones: dict[str, datetime] = {}
+    if not CORRECCIONES_FECHAS_ARCHIVO.exists():
+        return correcciones
+    try:
+        data = json.loads(CORRECCIONES_FECHAS_ARCHIVO.read_text(encoding="utf-8"))
+        items = data.get("correcciones", []) if isinstance(data, dict) else data
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            url = url_canonica(item.get("link", ""))
+            fecha = parsea_fecha_valor(item.get("fecha"))
+            if url and fecha:
+                correcciones[url] = fecha
+    except Exception as exc:
+        log(f"! correcciones_fechas.json inválido: {type(exc).__name__}: {exc}")
+    return correcciones
+
+
+def fecha_corregida_url(url: str) -> datetime | None:
+    return carga_correcciones_fechas().get(url_canonica(url))
 
 
 def dentro_ventana(fecha_dt: datetime | None, dias: int = VENTANA_DIAS, margen: int = 2) -> bool:
@@ -851,6 +945,8 @@ class DocumentoHTML(HTMLParser):
         self._script_text: list[str] = []
         self.json_ld: list[str] = []
         self.time_values: list[str] = []
+        self._en_time = False
+        self._time_text: list[str] = []
         self.ruido_omitido = 0
 
     @staticmethod
@@ -947,8 +1043,11 @@ class DocumentoHTML(HTMLParser):
         elif tag == "script":
             self._script_tipo = a.get("type", "").lower()
             self._script_text = []
-        elif tag == "time" and a.get("datetime"):
-            self.time_values.append(a["datetime"])
+        elif tag == "time":
+            self._en_time = True
+            self._time_text = []
+            if a.get("datetime"):
+                self.time_values.append(a["datetime"])
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -967,6 +1066,12 @@ class DocumentoHTML(HTMLParser):
                                 excluido=self._heading_excluido, contenido=self._heading_contenido,
                                 article=self._heading_article, main=self._heading_main)
             self._en_heading = False
+        elif tag == "time" and self._en_time:
+            texto_time = limpia_texto(" ".join(self._time_text))
+            if texto_time:
+                self.time_values.append(texto_time)
+            self._en_time = False
+            self._time_text = []
         elif tag == "script":
             if "ld+json" in self._script_tipo:
                 texto = "".join(self._script_text).strip()
@@ -990,6 +1095,8 @@ class DocumentoHTML(HTMLParser):
             self._p_text.append(data)
         if self._en_heading:
             self._heading_text.append(data)
+        if self._en_time:
+            self._time_text.append(data)
         if self._script_tipo:
             self._script_text.append(data)
 
@@ -1075,8 +1182,12 @@ def extrae_articulo_html(raw: bytes, url: str, headers: dict[str, str] | None = 
 
     titulo = parser.meta.get("og:title") or parser.meta.get("twitter:title") or limpia_texto(" ".join(parser.titulo))
     descripcion = parser.meta.get("og:description") or parser.meta.get("description") or parser.meta.get("twitter:description") or ""
-    fecha_valor = (parser.meta.get("article:published_time") or parser.meta.get("datepublished") or
-                   parser.meta.get("date") or parser.meta.get("dc.date") or parser.meta.get("dcterms.date"))
+    fecha_valor = (parser.meta.get("article:published_time") or parser.meta.get("article:published") or
+                   parser.meta.get("og:published_time") or parser.meta.get("datepublished") or
+                   parser.meta.get("datecreated") or parser.meta.get("publishdate") or
+                   parser.meta.get("pubdate") or parser.meta.get("parsely-pub-date") or
+                   parser.meta.get("sailthru.date") or parser.meta.get("date") or
+                   parser.meta.get("dc.date") or parser.meta.get("dcterms.date"))
     cuerpo_json = ""
     canonical = ""
     amp = ""
@@ -1125,12 +1236,22 @@ def extrae_articulo_html(raw: bytes, url: str, headers: dict[str, str] | None = 
         origen_cuerpo, cuerpo, calidad_cuerpo, omitidos = "sin_cuerpo", "", "baja", 0
     if len(cuerpo) > MAX_TEXTO_ANALISIS:
         cuerpo = cuerpo[:MAX_TEXTO_ANALISIS]
-    fecha_dt = parsea_fecha(fecha_valor, canonical or url)
+    fecha_dt = parsea_fecha_valor(fecha_valor)
+    fecha_origen = "metadata" if fecha_dt else ""
     if not fecha_dt:
         for t in parser.time_values:
-            fecha_dt = parsea_fecha(t, canonical or url)
+            fecha_dt = parsea_fecha_valor(t)
             if fecha_dt:
+                fecha_origen = "time"
                 break
+    if not fecha_dt:
+        fecha_dt = extrae_fecha_visible_html(texto_html)
+        if fecha_dt:
+            fecha_origen = "texto_visible"
+    if not fecha_dt:
+        fecha_dt = parsea_fecha_url(canonical or url)
+        if fecha_dt:
+            fecha_origen = "url"
     return {
         "titulo": limpia_texto(titulo)[:500],
         "resumen": limpia_texto(descripcion)[:1200],
@@ -1140,6 +1261,8 @@ def extrae_articulo_html(raw: bytes, url: str, headers: dict[str, str] | None = 
         "parrafos_cuerpo": cuerpo.count("\n") + (1 if cuerpo else 0),
         "bloques_ruido_omitidos": parser.ruido_omitido + omitidos,
         "fecha_dt": fecha_dt,
+        "fecha_origen": fecha_origen or "desconocida",
+        "fecha_publicacion_verificada": bool(fecha_dt),
         "url_final": url_canonica(canonical or url),
         "amp_url": url_canonica(amp),
         "links": parser.links,
@@ -1383,6 +1506,8 @@ def descubre_semillas_verificadas() -> list[dict[str, Any]]:
             "evidencia_uaf": evidencia,
             "link": url,
             "fecha_dt": fecha_dt,
+            "fecha_origen": "semilla_verificada",
+            "fecha_publicacion_verificada": True,
             "medio": item.get("medio") or (fuente_para_host(host) or {}).get("nombre", host),
             "origen_busqueda": "semilla_verificada",
             "origenes_busqueda": ["semilla_verificada"],
@@ -1736,7 +1861,17 @@ def enriquece_articulo(reg: dict[str, Any]) -> dict[str, Any]:
         r["calidad_cuerpo"] = art.get("calidad_cuerpo", "baja")
         r["parrafos_cuerpo"] = art.get("parrafos_cuerpo", 0)
         r["bloques_ruido_omitidos"] = art.get("bloques_ruido_omitidos", 0)
-        r["fecha_dt"] = art.get("fecha_dt") or r.get("fecha_dt") or parsea_fecha("", final)
+        if art.get("fecha_dt"):
+            r["fecha_dt"] = art["fecha_dt"]
+            r["fecha_origen"] = art.get("fecha_origen", "pagina")
+            r["fecha_publicacion_verificada"] = True
+        elif r.get("fecha_dt"):
+            r["fecha_origen"] = r.get("fecha_origen") or "descubrimiento"
+            r["fecha_publicacion_verificada"] = True
+        else:
+            r["fecha_dt"] = None
+            r["fecha_origen"] = "desconocida"
+            r["fecha_publicacion_verificada"] = False
         r["link"] = art.get("url_final") or url_canonica(final) or url
         r["url_final"] = r["link"]
         r["cuerpo_extraido"] = len(r.get("texto_enriquecido", "")) >= 180
@@ -2623,7 +2758,9 @@ def razon_descarte(reg: dict[str, Any]) -> str:
     estado = reg.get("estado_extraccion", "")
     if estado and estado != "completo" and not reg.get("titulo") and not reg.get("resumen"):
         return estado
-    if reg.get("fecha_dt") and not dentro_ventana(reg["fecha_dt"]):
+    if not reg.get("fecha_dt") or reg.get("fecha_publicacion_verificada") is False:
+        return "fecha_publicacion_no_verificada"
+    if not dentro_ventana(reg["fecha_dt"]):
         return "fuera_de_ventana"
     pertinencia = evalua_pertinencia(reg)
     if not pertinencia.get("valido") and MENCION_UAF_RE.search(texto_registro(reg)):
@@ -2634,10 +2771,11 @@ def razon_descarte(reg: dict[str, Any]) -> str:
 
 
 def candidato_pendiente(reg: dict[str, Any], motivo: str) -> dict[str, Any]:
-    f = reg.get("fecha_dt") or ahora_cl()
+    f = reg.get("fecha_dt")
     return {
         "id": id_registro(reg.get("link", ""), reg.get("titulo", "")),
-        "fecha": f.strftime("%Y-%m-%d"),
+        "fecha": f.strftime("%Y-%m-%d") if f else "",
+        "fecha_publicacion_verificada": bool(f and reg.get("fecha_publicacion_verificada") is not False),
         "medio": reg.get("medio", dominio_url(reg.get("link", ""))),
         "titulo": reg.get("titulo") or "Sin título recuperado",
         "link": reg.get("link", ""),
@@ -2650,13 +2788,17 @@ def candidato_pendiente(reg: dict[str, Any], motivo: str) -> dict[str, Any]:
 
 def registro_publicable(reg: dict[str, Any], modo: str) -> dict[str, Any]:
     r = clasifica(dict(reg))
-    fecha_dt = r.get("fecha_dt") or ahora_cl()
+    fecha_dt = r.get("fecha_dt")
+    if not fecha_dt:
+        raise ValueError("registro publicable sin fecha de publicación verificada")
     r.update({
         "id": id_registro(r.get("link", ""), r.get("titulo", "")),
         "canal": "prensa",
         "fecha": fecha_dt.strftime("%Y-%m-%d"),
         "fecha_hora": fecha_dt.isoformat(),
         "fecha_legible": fecha_dt.strftime("%d/%m/%Y"),
+        "fecha_origen": r.get("fecha_origen") or "desconocida",
+        "fecha_publicacion_verificada": bool(r.get("fecha_publicacion_verificada", True)),
         "medio": r.get("medio") or (fuente_para_host(dominio_url(r.get("link", ""))) or {}).get("nombre", dominio_url(r.get("link", ""))),
         "resumen": limpia_texto(r.get("resumen", ""))[:1000],
         "titulo": limpia_texto(r.get("titulo", ""))[:500],
@@ -2686,6 +2828,33 @@ def mezcla_historico(previos: list[dict[str, Any]], nuevos: list[dict[str, Any]]
         if dominio_url(r.get("link", "")) in DOMINIOS_EXCLUIDOS_PUBLICACION or url_excluida_editorialmente(r.get("link", "")):
             audita_reclasificacion(antes, None, "dominio o URL excluida")
             continue
+        # Los registros heredados de versiones anteriores no tenían trazabilidad
+        # de fecha y podían haber recibido la hora de ejecución como publicación.
+        # Solo se conservan si la fecha puede comprobarse por URL o validación manual;
+        # el barrido de conciliación repoblará las noticias recientes con metadatos.
+        fecha_corregida = fecha_corregida_url(r.get("link", ""))
+        if fecha_corregida:
+            r["fecha_hora"] = fecha_corregida.isoformat()
+            r["fecha"] = fecha_corregida.strftime("%Y-%m-%d")
+            r["fecha_legible"] = fecha_corregida.strftime("%d/%m/%Y")
+            r["fecha_publicacion_verificada"] = True
+            r["fecha_origen"] = "correccion_auditable"
+        elif "fecha_publicacion_verificada" not in r:
+            fecha_url = parsea_fecha_url(r.get("link", ""))
+            if r.get("verificacion_manual"):
+                r["fecha_publicacion_verificada"] = True
+                r["fecha_origen"] = r.get("fecha_origen") or "verificacion_manual"
+            elif fecha_url:
+                r["fecha_hora"] = fecha_url.isoformat()
+                r["fecha"] = fecha_url.strftime("%Y-%m-%d")
+                r["fecha_legible"] = fecha_url.strftime("%d/%m/%Y")
+                r["fecha_publicacion_verificada"] = True
+                r["fecha_origen"] = "url"
+            else:
+                # Se conserva para no perder cobertura histórica, pero nunca puede
+                # alimentar alertas de 24 horas hasta que la fecha sea comprobada.
+                r["fecha_publicacion_verificada"] = False
+                r["fecha_origen"] = "legado_sin_trazabilidad"
         # Todas las publicaciones, incluidas las verificadas, reciben la taxonomía
         # vigente. Las semillas mantienen aceptación UAF por su validación manual.
         r = clasifica(r)
@@ -2725,10 +2894,14 @@ def calcula_metricas(prensa: list[dict[str, Any]], social: list[dict[str, Any]],
     c24 = ahora - timedelta(hours=24)
     c48 = ahora - timedelta(hours=48)
     c5 = ahora - timedelta(days=5)
-    uaf_prensa_publica = list(uaf)
-    cur = [r for r in uaf_prensa_publica if (parsea_fecha(r.get("fecha_hora")) or datetime.min.replace(tzinfo=TZ_CL)) >= c24]
-    prev = [r for r in uaf_prensa_publica if c48 <= (parsea_fecha(r.get("fecha_hora")) or datetime.min.replace(tzinfo=TZ_CL)) < c24]
-    five = [r for r in uaf_prensa_publica if (parsea_fecha(r.get("fecha_hora")) or datetime.min.replace(tzinfo=TZ_CL)) >= c5]
+    uaf_prensa_publica = [r for r in uaf if r.get("fecha_publicacion_verificada") is True]
+    def fecha_valida_ahora(r: dict[str, Any]) -> datetime | None:
+        f = parsea_fecha_valor(r.get("fecha_hora") or r.get("fecha"))
+        return f if f and f <= ahora + timedelta(minutes=10) else None
+    cur = [r for r in uaf_prensa_publica if (fecha_valida_ahora(r) or datetime.min.replace(tzinfo=TZ_CL)) >= c24]
+    prev = [r for r in uaf_prensa_publica if c48 <= (fecha_valida_ahora(r) or datetime.min.replace(tzinfo=TZ_CL)) < c24]
+    five = [r for r in uaf_prensa_publica if (fecha_valida_ahora(r) or datetime.min.replace(tzinfo=TZ_CL)) >= c5]
+    cur.sort(key=lambda r: fecha_valida_ahora(r) or datetime.min.replace(tzinfo=TZ_CL), reverse=True)
     por_dia = {d: sum(1 for r in prensa if r.get("fecha") == d) for d in dias}
     return {
         "uaf_portada": {
@@ -2908,10 +3081,24 @@ def ejecutar(modo: str) -> int:
     revisado_iso = ahora_cl().isoformat()
     for r in enriquecidos:
         rid = id_registro(r.get("link", ""), r.get("titulo", ""))
+        motivo_fecha = ""
+        if not r.get("fecha_dt") or r.get("fecha_publicacion_verificada") is False:
+            motivo_fecha = "fecha_publicacion_no_verificada"
+        elif not dentro_ventana(r.get("fecha_dt")):
+            motivo_fecha = "fuera_de_ventana"
         pertinencia = evalua_pertinencia(r)
         uaf = pertinencia.get("tipo") == "uaf_directa"
         pertinente = bool(pertinencia.get("valido"))
-        if pertinente and (uaf or INCLUIR_CONTEXTO_LAFT):
+        if motivo_fecha:
+            motivo = motivo_fecha
+            estado_val = motivo
+            descartes[motivo] += 1
+            muestra = candidato_pendiente(r, motivo)
+            if motivo == "fecha_publicacion_no_verificada":
+                pendientes.append(muestra)
+            if len(muestras_descartes) < 100:
+                muestras_descartes.append(muestra)
+        elif pertinente and (uaf or INCLUIR_CONTEXTO_LAFT):
             pub = registro_publicable(r, modo)
             aceptados.append(pub)
             estado_val = "aceptado_uaf" if pub.get("uaf") else "aceptado_contexto"
@@ -3076,6 +3263,7 @@ def evalua_url(url: str) -> dict[str, Any]:
     return {
         "url": url, "url_final": r.get("link"), "titulo": r.get("titulo"),
         "cuerpo_extraido": r.get("cuerpo_extraido"), "estado_extraccion": r.get("estado_extraccion"),
+        "fecha_origen": r.get("fecha_origen"), "fecha_publicacion_verificada": r.get("fecha_publicacion_verificada"),
         "fecha": r.get("fecha_dt").isoformat() if r.get("fecha_dt") else None,
         "uaf_chile": uaf, "confianza": confianza, "puntaje": puntaje, "menciones": menciones,
         "motivos": motivos, "pertinencia": evalua_pertinencia(r), "pertinente": es_pertinente(r), "contexto": extrae_contexto_uaf(r),
