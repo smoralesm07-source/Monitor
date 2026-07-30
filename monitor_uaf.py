@@ -61,6 +61,27 @@ except ImportError:  # pragma: no cover
     ZoneInfo = None
 
 # ---------------------------------------------------------------------------
+# Serialización JSON segura
+# ---------------------------------------------------------------------------
+
+
+def json_default(obj: Any) -> Any:
+    """Convierte tipos Python no nativos de JSON a valores persistibles.
+
+    Algunos feeds, metadatos y cálculos internos pueden conservar objetos
+    ``datetime`` o ``date``. El dashboard espera texto ISO-8601, por lo que
+    esta conversión evita que una sola fecha detenga toda la publicación.
+    """
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, set):
+        return sorted(obj)
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+
+# ---------------------------------------------------------------------------
 # Rutas y configuración
 # ---------------------------------------------------------------------------
 
@@ -72,7 +93,7 @@ CONFIG = BASE / "config.json"
 FUENTES_ARCHIVO = BASE / "fuentes_uaf.json"
 CASOS_CONTROL_ARCHIVO = BASE / "casos_control.json"
 
-VERSION_MONITOR = "7.1-hotfix-publicacion-diagnostico"
+VERSION_MONITOR = "7.3-fix-serializacion-json"
 ESQUEMA_ESTADO = 4
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 UA = "Mozilla/5.0 (compatible; MonitorUAF/7.0; +https://github.com/)"
@@ -1573,7 +1594,7 @@ def guarda_estado(estado: dict[str, Any]) -> None:
     estado["procesados"] = dict(list(procesados.items())[-50_000:])
     estado["vistos"] = list(dict.fromkeys(estado.get("vistos", [])))[-50_000:]
     temporal = ESTADO.with_suffix(".tmp")
-    temporal.write_text(json.dumps(estado, ensure_ascii=False, indent=1), encoding="utf-8")
+    temporal.write_text(json.dumps(estado, ensure_ascii=False, indent=1, default=json_default), encoding="utf-8")
     os.replace(temporal, ESTADO)
 
 
@@ -1731,7 +1752,7 @@ def calcula_metricas(prensa: list[dict[str, Any]], social: list[dict[str, Any]],
 def carga_config() -> dict[str, Any]:
     if not CONFIG.exists():
         try:
-            CONFIG.write_text(json.dumps(CONFIG_EJEMPLO, ensure_ascii=False, indent=2), encoding="utf-8")
+            CONFIG.write_text(json.dumps(CONFIG_EJEMPLO, ensure_ascii=False, indent=2, default=json_default), encoding="utf-8")
         except OSError:
             pass
     cfg = carga_json(CONFIG, CONFIG_EJEMPLO)
@@ -1943,7 +1964,7 @@ def ejecutar(modo: str) -> int:
         },
     }
     temporal = SALIDA.with_suffix(".tmp")
-    temporal.write_text(json.dumps(salida, ensure_ascii=False, indent=1), encoding="utf-8")
+    temporal.write_text(json.dumps(salida, ensure_ascii=False, indent=1, default=json_default), encoding="utf-8")
     os.replace(temporal, SALIDA)
     if not migracion:
         try:
@@ -1977,7 +1998,7 @@ def validar_fuentes_config() -> int:
         "faltantes_en_catalogo": faltantes, "duplicados": duplicados,
         "nuevas_fuentes_institucionales": [x for x in ("aduana.cl", "tgr.gob.cl", "spensiones.cl", "scj.gob.cl", "estrategiaantilavado.cl") if x in DOMINIOS_CHILENOS],
         "retencion_procesados_dias": RETENCION_PROCESADOS_DIAS,
-    }, ensure_ascii=False, indent=2))
+    }, ensure_ascii=False, indent=2, default=json_default))
     return 1 if faltantes or duplicados else 0
 
 
@@ -1999,7 +2020,7 @@ def evalua_url(url: str) -> dict[str, Any]:
 
 
 def probar_url(url: str) -> None:
-    print(json.dumps(evalua_url(url), ensure_ascii=False, indent=2))
+    print(json.dumps(evalua_url(url), ensure_ascii=False, indent=2, default=json_default))
 
 
 def probar_casos_control() -> int:
@@ -2020,7 +2041,7 @@ def probar_casos_control() -> int:
             fallos += 1
         resultados.append(resultado)
     print(json.dumps({"version": VERSION_MONITOR, "casos": len(resultados), "fallos": fallos,
-                      "resultados": resultados}, ensure_ascii=False, indent=2))
+                      "resultados": resultados}, ensure_ascii=False, indent=2, default=json_default))
     return 1 if fallos else 0
 
 
@@ -2029,7 +2050,7 @@ def probar_deteccion(texto: str, medio: str = "Medio chileno", link: str = "http
     uaf, confianza, motivos, puntaje, menciones = analiza_uaf(reg)
     print(json.dumps({"uaf_chile": uaf, "confianza": confianza, "puntaje": puntaje,
                       "menciones": menciones, "motivos": motivos, "pertinente": es_pertinente(reg),
-                      "contexto": extrae_contexto_uaf(reg)}, ensure_ascii=False, indent=2))
+                      "contexto": extrae_contexto_uaf(reg)}, ensure_ascii=False, indent=2, default=json_default))
 
 
 def diagnostico() -> None:
@@ -2040,7 +2061,7 @@ def diagnostico() -> None:
         "fuentes": [{"nombre": f["nombre"], "dominio": f["dominio"], "tipo": f["tipo"],
                      "feeds": len(f.get("feeds", [])), "sitemaps": len(f.get("sitemaps", [])),
                      "secciones": len(f.get("secciones", []))} for f in FUENTES],
-    }, ensure_ascii=False, indent=2))
+    }, ensure_ascii=False, indent=2, default=json_default))
 
 
 def prueba_correo() -> None:
