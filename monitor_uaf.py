@@ -95,7 +95,7 @@ CASOS_CONTROL_ARCHIVO = BASE / "casos_control.json"
 SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
 EXCLUSIONES_EDITORIALES_ARCHIVO = BASE / "exclusiones_editoriales.json"
 
-VERSION_MONITOR = "8.2-foco-24h-fenomenos-dinamicos"
+VERSION_MONITOR = "8.2.1-foco-24h-fenomenos-dinamicos"
 ESQUEMA_ESTADO = 9
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 UA = "Mozilla/5.0 (compatible; MonitorUAF/8.2; +https://github.com/)"
@@ -1954,7 +1954,8 @@ def analiza_uaf(reg: dict[str, Any]) -> tuple[bool, str, list[str], int, int]:
                 score += min(5, chile_hits * 2); motivos.append("contexto chileno próximo")
             if laft_hits:
                 score += min(5, laft_hits * 2); motivos.append("contexto LA/FT próximo")
-            if contiene_frase(ventana, UAF_ACCIONES):
+            accion_uaf_inequivoca = contiene_frase(ventana, UAF_ACCIONES)
+            if accion_uaf_inequivoca:
                 score += 5; motivos.append("acción institucional inequívoca")
             if contiene_frase(ventana, UAF_AMBIGUAS) and not nombre_completo:
                 score -= 12; motivos.append("sigla compatible con otro significado")
@@ -1962,11 +1963,21 @@ def analiza_uaf(reg: dict[str, Any]) -> tuple[bool, str, list[str], int, int]:
             if extranjeros or RE_UAF_EXTRANJERA.search(ventana):
                 score -= 12; motivos.append("contexto de unidad extranjera")
             # Una sigla corporal aislada no se valida por el solo hecho de estar en un medio chileno.
-            if origen == "cuerpo" and not nombre_completo and not contiene_frase(ventana, UAF_ACCIONES) and laft_hits == 0:
+            if origen == "cuerpo" and not nombre_completo and not accion_uaf_inequivoca and laft_hits == 0:
                 score -= 6; motivos.append("sigla corporal sin acción institucional ni LA/FT")
             umbral = 7 if origen == "titulo" else 8 if origen == "bajada" else 9
             if origen == "cuerpo" and calidad != "alta":
-                umbral = 12
+                # Compatibilidad y cobertura: una acción institucional inequívoca
+                # publicada por un organismo oficial chileno sigue siendo válida
+                # aunque el registro no traiga metadatos de calidad del extractor
+                # (por ejemplo, registros de pruebas o feeds institucionales).
+                # En medios no oficiales se conserva el umbral alto para evitar
+                # contaminación por módulos de noticias relacionadas.
+                if accion_uaf_inequivoca and host in DOMINIOS_INSTITUCIONALES:
+                    umbral = 9
+                    motivos.append("acción UAF en fuente oficial: umbral institucional")
+                else:
+                    umbral = 12
             puntajes.append((score, motivos, origen, umbral))
     if not puntajes:
         return False, "sin_mencion", ["sin mención UAF"], 0, 0
