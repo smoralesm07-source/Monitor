@@ -1,0 +1,46 @@
+name: Probar correo Monitor UAF
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Grupo distinto del barrido de prensa: la prueba no queda esperando a que
+# termine una ejecución programada del monitor.
+concurrency:
+  group: monitor-uaf-prueba-correo
+  cancel-in-progress: true
+
+jobs:
+  probar-correo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v6
+
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verificar script
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s probar_correo.py
+          python3 -m py_compile probar_correo.py
+
+      - name: Diagnosticar y enviar correo de prueba
+        env:
+          MONITOR_CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
+          MONITOR_SMTP_SERVIDOR: ${{ secrets.MONITOR_SMTP_SERVIDOR }}
+          MONITOR_SMTP_PUERTO: ${{ secrets.MONITOR_SMTP_PUERTO }}
+          MONITOR_SMTP_SEGURIDAD: ${{ secrets.MONITOR_SMTP_SEGURIDAD }}
+          MONITOR_SMTP_USUARIO: ${{ secrets.MONITOR_SMTP_USUARIO }}
+          MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
+          MONITOR_DESTINATARIOS: ${{ secrets.MONITOR_DESTINATARIOS }}
+          MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
+        shell: bash
+        run: python3 -u probar_correo.py
