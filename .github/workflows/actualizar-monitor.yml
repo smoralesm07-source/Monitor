@@ -56,16 +56,8 @@ jobs:
         env:
           # Presupuesto de tiempo interno, inferior al timeout del job.
           MONITOR_PRESUPUESTO_SEG: "780"
-          MONITOR_HILOS: "8"
-          MONITOR_BARRIDO: "90"
-          MONITOR_BARRIDO_MIN_FUENTE: "2"
-          MONITOR_MAX_ENRIQUECER: "260"
-          MONITOR_DESCUBRE_POR_CORRIDA: "12"
-          MONITOR_PORTADAS_POR_CORRIDA: "14"
-          MONITOR_DOMINIOS_SITE: "8"
-          MONITOR_DUCKDUCKGO_ACTIVO: "true"
-          MONITOR_PERPLEXITY_ACTIVO: ${{ secrets.MONITOR_PERPLEXITY_ACTIVO }}
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+          MONITOR_HILOS: "6"
+          MONITOR_BARRIDO: "70"
           MONITOR_RESPETA_ROBOTS: "true"
           # Correo (configúralos en Settings → Secrets and variables → Actions)
           MONITOR_CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
