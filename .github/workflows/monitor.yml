@@ -128,7 +128,7 @@ jobs:
           MONITOR_SMTP_SEGURIDAD: ${{ secrets.MONITOR_SMTP_SEGURIDAD }}
           MONITOR_SMTP_USUARIO: ${{ secrets.MONITOR_SMTP_USUARIO }}
           MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
-          MONITOR_DESTINATARIOS: ${{ secrets.MONITOR_DESTINATARIOS }}
+          MONITOR_DESTINATARIOS: ${{ vars.MONITOR_DESTINATARIOS }}
           MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
         shell: bash
         run: |
