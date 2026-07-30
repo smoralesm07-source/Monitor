@@ -1,0 +1,19 @@
+HOTFIX V7.1
+===========
+
+1. Copia TODOS los archivos del paquete a la raíz del repositorio.
+   No subas la carpeta monitor_uaf_v7_1_hotfix como subcarpeta.
+2. Conserva tu index.html en la raíz.
+3. Reemplaza .github/workflows/monitor.yml.
+4. Elimina el secret MONITOR_MINIMO_AVISO: el valor predeterminado ya es 1.
+   Esto evita que GitHub oculte "exit code 1" como "exit code ***".
+5. Ejecuta primero modo rapido, correo de prueba false.
+6. Si falla, descarga el artefacto diagnostico-monitor-* desde la ejecución.
+
+Cambios:
+- prevalidación de archivos antes del barrido;
+- salida Python en tiempo real;
+- monitor.log y validacion.log adjuntos;
+- fallo SMTP no detiene el dashboard;
+- fallo al guardar monitor-state queda como advertencia;
+- comprobación explícita de datos.json.

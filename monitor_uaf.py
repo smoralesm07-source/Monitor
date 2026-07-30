@@ -72,7 +72,7 @@ CONFIG = BASE / "config.json"
 FUENTES_ARCHIVO = BASE / "fuentes_uaf.json"
 CASOS_CONTROL_ARCHIVO = BASE / "casos_control.json"
 
-VERSION_MONITOR = "7.0-doble-motor-conciliacion"
+VERSION_MONITOR = "7.1-hotfix-publicacion-diagnostico"
 ESQUEMA_ESTADO = 4
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 UA = "Mozilla/5.0 (compatible; MonitorUAF/7.0; +https://github.com/)"
@@ -1946,7 +1946,17 @@ def ejecutar(modo: str) -> int:
     temporal.write_text(json.dumps(salida, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(temporal, SALIDA)
     if not migracion:
-        envia_correo(nuevos, estado, modo)
+        try:
+            envia_correo(nuevos, estado, modo)
+        except Exception as exc:
+            # El correo es un canal accesorio: una falla SMTP no debe impedir
+            # guardar datos ni publicar el dashboard.
+            estado["ultimo_error_correo"] = {
+                "fecha": ahora_cl().isoformat(),
+                "tipo": type(exc).__name__,
+                "mensaje": str(exc)[:500],
+            }
+            log(f"ADVERTENCIA correo no enviado: {type(exc).__name__}: {exc}")
     else:
         log("Migración de esquema: se suprimen correos en esta corrida.")
     guarda_estado(estado)

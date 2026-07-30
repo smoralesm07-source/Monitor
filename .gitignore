@@ -1,10 +1,8 @@
-config.json
-monitor.log
 __pycache__/
 *.py[cod]
-.ipynb_checkpoints/
+.monitor_estado.json
+monitor.log
+config.json
 public/
-estado_previo/
-estado_nuevo/
-*.tmp
 .DS_Store
+Thumbs.db
