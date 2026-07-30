@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Monitor UAF Chile · motor v8.1 con control profundo de pertinencia y clasificación contextual.
+"""Monitor UAF Chile · motor v8.2 con foco 24h y fenómenos dinámicos de pertinencia y clasificación contextual.
 
 Modos:
   rapido         Monitoreo oportuno para ejecutar cada 15 minutos.
@@ -95,10 +95,10 @@ CASOS_CONTROL_ARCHIVO = BASE / "casos_control.json"
 SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
 EXCLUSIONES_EDITORIALES_ARCHIVO = BASE / "exclusiones_editoriales.json"
 
-VERSION_MONITOR = "8.1-calidad-profunda"
-ESQUEMA_ESTADO = 8
+VERSION_MONITOR = "8.2-foco-24h-fenomenos-dinamicos"
+ESQUEMA_ESTADO = 9
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
-UA = "Mozilla/5.0 (compatible; MonitorUAF/8.1; +https://github.com/)"
+UA = "Mozilla/5.0 (compatible; MonitorUAF/8.2; +https://github.com/)"
 UA_ROBOTS = "MonitorUAF"
 
 CONFIG_EJEMPLO = {
@@ -2177,6 +2177,256 @@ def clasifica_fenomeno(reg: dict[str, Any]) -> tuple[str, str, str, list[str]]:
     return clave,ev["evidencia"],ev["confianza"],descartados[:8]
 
 
+# ---------------------------------------------------------------------------
+# Descubrimiento y persistencia de fenómenos dinámicos
+# ---------------------------------------------------------------------------
+
+FENOMENOS_FIJOS_ESPECIFICOS = {"sartor", "tren_de_aragua"}
+PALABRAS_VACIAS_FENOMENOS = {
+    "a","al","algo","ante","bajo","como","con","contra","cual","cuando","de","del","desde","donde","durante",
+    "e","el","ella","ellas","ellos","en","entre","era","es","esa","ese","eso","esta","este","esto","fue","ha","hacia",
+    "hasta","hay","la","las","le","les","lo","los","mas","más","mediante","muy","ni","no","o","para","pero","por",
+    "porque","que","qué","se","segun","según","ser","si","sin","sobre","su","sus","tambien","también","tras","un","una",
+    "uno","unos","unas","y","ya"
+}
+PALABRAS_GENERICAS_FENOMENOS = {
+    "uaf","unidad","analisis","análisis","financiero","financiera","financieros","financieras","chile","chileno","chilena",
+    "lavado","activos","dinero","laft","delito","delitos","crimen","organizado","organizada","organizacion","organización",
+    "criminal","criminales","fiscalia","fiscalía","fiscal","investigacion","investigación","noticia","noticias","prensa",
+    "publicacion","publicación","informe","reportaje","articulo","artículo","caso","casos","tema","temas","proyecto","ley",
+    "senador","senadora","diputado","diputada","gobierno","autoridad","autoridades","nuevo","nueva","nuevos","nuevas",
+    "contrabando","fraude","estafa","corrupcion","corrupción","narcotrafico","narcotráfico","apuestas","trata","personas",
+    "prevencion","prevención","cumplimiento","regulacion","regulación","operaciones","sospechosas","reporte","reportes"
+}
+PREFIJOS_FENOMENO = {
+    "contrabando": "Contrabando",
+    "crimen_organizado": "Crimen organizado",
+    "corrupcion": "Corrupción",
+    "narcotrafico": "Narcotráfico",
+    "fraude": "Fraude",
+    "apuestas": "Apuestas y juego ilegal",
+    "cibercrimen": "Cibercrimen",
+    "trata": "Trata de personas",
+}
+
+
+def _tokens_evento(texto: Any) -> list[str]:
+    toks = re.findall(r"[a-záéíóúüñ0-9]{2,}", normaliza(texto))
+    return [t for t in toks if t not in PALABRAS_VACIAS_FENOMENOS and t not in PALABRAS_GENERICAS_FENOMENOS and (len(t) >= 3 or t.isdigit())]
+
+
+def _firma_evento(reg: dict[str, Any]) -> dict[str, Any]:
+    titulo = reg.get("titulo", "")
+    contexto = " ".join([
+        reg.get("resumen", ""), reg.get("contexto_uaf", ""), reg.get("pertinencia_evidencia", ""),
+        reg.get("fenomeno_evidencia", "")
+    ])
+    titulo_tokens = _tokens_evento(titulo)
+    contexto_tokens = _tokens_evento(contexto)[:35]
+    tokens = set(titulo_tokens + contexto_tokens)
+    ngrams: set[str] = set()
+    for n in (2, 3, 4):
+        for i in range(max(0, len(titulo_tokens) - n + 1)):
+            ng = titulo_tokens[i:i+n]
+            if len(set(ng)) >= 2:
+                ngrams.add(" ".join(ng))
+    return {"tokens": tokens, "titulo_tokens": set(titulo_tokens), "titulo_secuencia": titulo_tokens, "ngrams": ngrams}
+
+
+def _similitud_evento(a: dict[str, Any], b: dict[str, Any]) -> float:
+    if not a["tokens"] or not b["tokens"]:
+        return 0.0
+    comun_ng = a["ngrams"] & b["ngrams"]
+    if comun_ng:
+        return 1.0
+    inter_t = a["titulo_tokens"] & b["titulo_tokens"]
+    union_t = a["titulo_tokens"] | b["titulo_tokens"]
+    jac_t = len(inter_t) / max(1, len(union_t))
+    inter = a["tokens"] & b["tokens"]
+    union = a["tokens"] | b["tokens"]
+    jac = len(inter) / max(1, len(union))
+    if len(inter_t) >= 3 and jac_t >= .20:
+        return .85
+    if len(inter_t) >= 2 and jac_t >= .28:
+        return .72
+    if len(inter) >= 3 and jac >= .30:
+        return .62
+    return 0.0
+
+
+def _span_original(titulo: str, seleccion: list[str]) -> str:
+    palabras = re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9$%.-]+", titulo or "")
+    norm_pal = [normaliza(p) for p in palabras]
+    indices = [i for i, p in enumerate(norm_pal) if p in seleccion]
+    if len(indices) < 2:
+        return ""
+    mejor = None
+    for i in range(len(indices)):
+        for j in range(i + 1, len(indices)):
+            a, b = indices[i], indices[j]
+            if b - a > 8:
+                break
+            contenidos = {norm_pal[k] for k in range(a, b + 1) if norm_pal[k] in seleccion}
+            if len(contenidos) >= 2:
+                cand = (b - a, a, b)
+                if mejor is None or cand < mejor:
+                    mejor = cand
+    if not mejor:
+        return ""
+    _, a, b = mejor
+    while a <= b and norm_pal[a] in PALABRAS_VACIAS_FENOMENOS:
+        a += 1
+    while b >= a and norm_pal[b] in PALABRAS_VACIAS_FENOMENOS:
+        b -= 1
+    return " ".join(palabras[a:b+1]).strip(" -–—:;,." )
+
+
+def _capitaliza_etiqueta(texto: str) -> str:
+    menores = {"de","del","la","las","los","y","en","con","por","para"}
+    partes = texto.split()
+    salida=[]
+    for i,p in enumerate(partes):
+        if p.isupper() or any(ch.isdigit() for ch in p) or "$" in p:
+            salida.append(p)
+        elif i and normaliza(p) in menores:
+            salida.append(p.lower())
+        else:
+            salida.append(p[:1].upper()+p[1:])
+    return " ".join(salida)
+
+
+def _etiqueta_cluster(grupo: list[dict[str, Any]], firmas: dict[str, dict[str, Any]]) -> tuple[str, list[str]]:
+    df: Counter[str] = Counter()
+    ngdf: Counter[str] = Counter()
+    for r in grupo:
+        f = firmas[r["id"]]
+        df.update(f["tokens"])
+        ngdf.update(f["ngrams"])
+    comunes = [t for t,n in df.most_common() if n >= 2]
+    ngram = next((ng for ng,n in ngdf.most_common() if n >= 2 and len(ng.split()) >= 2), "")
+    seleccion = ngram.split() if ngram else comunes[:4]
+    representante = max(grupo, key=lambda r: sum(1 for t in seleccion if t in firmas[r["id"]]["titulo_tokens"]))
+    frase = _span_original(representante.get("titulo", ""), seleccion)
+    if not frase and seleccion:
+        frase = " ".join(seleccion[:3])
+    frase = _capitaliza_etiqueta(frase)[:70]
+    bases = Counter(r.get("fenomeno_base") or r.get("fenomeno") or "otro" for r in grupo)
+    base = bases.most_common(1)[0][0] if bases else "otro"
+    prefijo = PREFIJOS_FENOMENO.get(base, "")
+    if prefijo and normaliza(prefijo) not in normaliza(frase):
+        etiqueta = f"{prefijo}: {frase}" if frase else prefijo
+    else:
+        etiqueta = frase or "Fenómeno emergente"
+    etiqueta = re.sub(r"\s+", " ", etiqueta).strip(" :-")[:90]
+    return etiqueta, comunes[:12]
+
+
+def _jaccard_tokens(a: Iterable[str], b: Iterable[str]) -> float:
+    sa, sb = set(a), set(b)
+    return len(sa & sb) / max(1, len(sa | sb))
+
+
+def _registro_dinamico_existente(registro: dict[str, Any], tokens: list[str], etiqueta: str) -> tuple[str, dict[str, Any]] | None:
+    ne = normaliza(etiqueta)
+    mejor = None
+    for fid, item in registro.items():
+        sim = _jaccard_tokens(tokens, item.get("tokens", []))
+        if normaliza(item.get("label", "")) == ne:
+            sim = 1.0
+        if sim >= .45 and (mejor is None or sim > mejor[0]):
+            mejor = (sim, fid, item)
+    return (mejor[1], mejor[2]) if mejor else None
+
+
+def aplica_fenomenos_dinamicos(prensa: list[dict[str, Any]], estado: dict[str, Any], ahora: datetime) -> list[dict[str, Any]]:
+    """Detecta eventos repetidos sin depender de una lista cerrada y mantiene su identidad en el tiempo."""
+    registro: dict[str, Any] = dict(estado.get("fenomenos_dinamicos") or {})
+    for r in prensa:
+        base = r.get("fenomeno_base") or (r.get("fenomeno") if not str(r.get("fenomeno", "")).startswith("din_") else "otro") or "otro"
+        r["fenomeno_base"] = base
+        r["fenomeno_base_label"] = LABELS["fenomeno"].get(base, r.get("fenomeno_label", base))
+        r["fenomeno"] = base
+        r["fenomeno_label"] = r["fenomeno_base_label"]
+        r["fenomeno_origen"] = "regla"
+        for k in ("fenomeno_dinamico", "fenomeno_dinamico_label", "fenomeno_dinamico_evidencia", "fenomeno_dinamico_confianza"):
+            r.pop(k, None)
+    candidatos = [r for r in prensa if r.get("id") and len(_tokens_evento(r.get("titulo", ""))) >= 2]
+    firmas = {r["id"]: _firma_evento(r) for r in candidatos}
+    parent = list(range(len(candidatos)))
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb: parent[rb] = ra
+    for i in range(len(candidatos)):
+        for j in range(i + 1, len(candidatos)):
+            if _similitud_evento(firmas[candidatos[i]["id"]], firmas[candidatos[j]["id"]]) >= .60:
+                union(i, j)
+    grupos: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for i, r in enumerate(candidatos):
+        grupos[find(i)].append(r)
+    activos: set[str] = set()
+    resumen: list[dict[str, Any]] = []
+    for grupo in grupos.values():
+        medios = {r.get("medio") for r in grupo if r.get("medio")}
+        if len(grupo) < 3 and not (len(grupo) >= 2 and len(medios) >= 2):
+            continue
+        # Si el grupo contiene un caso específico ya conocido, propaga esa
+        # identidad a las publicaciones relacionadas en lugar de crear un
+        # duplicado dinámico del mismo caso.
+        fijos = Counter(r.get("fenomeno_base") for r in grupo if r.get("fenomeno_base") in FENOMENOS_FIJOS_ESPECIFICOS)
+        if fijos:
+            fijo = fijos.most_common(1)[0][0]
+            etiqueta_fija = LABELS["fenomeno"].get(fijo, fijo)
+            evidencia_fija = "; ".join(r.get("titulo", "") for r in grupo[:3])[:900]
+            for r in grupo:
+                r.update({"fenomeno": fijo, "fenomeno_label": etiqueta_fija, "fenomeno_origen": "regla_especifica", "fenomeno_evidencia": r.get("fenomeno_evidencia") or evidencia_fija})
+            continue
+        etiqueta, tokens = _etiqueta_cluster(grupo, firmas)
+        if len(tokens) < 2 or normaliza(etiqueta) in {"fenomeno emergente", "otros focos"}:
+            continue
+        previo = _registro_dinamico_existente(registro, tokens, etiqueta)
+        if previo:
+            fid, item = previo
+        else:
+            fid = "din_" + hashlib.sha1((normaliza(etiqueta)+"|"+"|".join(tokens[:8])).encode("utf-8")).hexdigest()[:10]
+            item = {"id": fid, "primera_deteccion": ahora.isoformat(), "total_observaciones": 0, "articulos_historicos": []}
+        ids = sorted({r["id"] for r in grupo})
+        historicos = list(dict.fromkeys((item.get("articulos_historicos") or []) + ids))[-500:]
+        fechas = [parsea_fecha(r.get("fecha_hora") or r.get("fecha")) for r in grupo]
+        fechas = [f for f in fechas if f]
+        item.update({
+            "id": fid, "label": etiqueta, "tokens": tokens, "ultima_deteccion": ahora.isoformat(), "activo": True,
+            "articulos_ventana": len(ids), "medios_ventana": len(medios), "articulos_historicos": historicos,
+            "total_observaciones": len(historicos), "primera_publicacion": min(fechas).isoformat() if fechas else None,
+            "ultima_publicacion": max(fechas).isoformat() if fechas else None,
+            "ejemplos": [{"titulo": r.get("titulo"), "medio": r.get("medio"), "link": r.get("link"), "fecha": r.get("fecha")} for r in grupo[:5]],
+        })
+        registro[fid] = item; activos.add(fid); LABELS["fenomeno"][fid] = etiqueta
+        evidencia = "; ".join(r.get("titulo", "") for r in grupo[:3])[:900]
+        confianza = "alta" if len(grupo) >= 3 and len(medios) >= 2 else "media"
+        for r in grupo:
+            if r.get("fenomeno_base") in FENOMENOS_FIJOS_ESPECIFICOS:
+                continue
+            r.update({
+                "fenomeno": fid, "fenomeno_label": etiqueta, "fenomeno_origen": "dinamico",
+                "fenomeno_dinamico": fid, "fenomeno_dinamico_label": etiqueta,
+                "fenomeno_dinamico_evidencia": evidencia, "fenomeno_dinamico_confianza": confianza,
+            })
+        resumen.append({k:item.get(k) for k in ("id","label","primera_deteccion","ultima_deteccion","articulos_ventana","medios_ventana","total_observaciones","primera_publicacion","ultima_publicacion","ejemplos")})
+    corte = ahora - timedelta(days=90)
+    depurado = {}
+    for fid, item in registro.items():
+        ult = parsea_fecha(item.get("ultima_deteccion"))
+        item["activo"] = fid in activos
+        if not ult or ult >= corte:
+            depurado[fid] = item
+            if item.get("label"): LABELS["fenomeno"][fid] = item["label"]
+    estado["fenomenos_dinamicos"] = depurado
+    return sorted(resumen, key=lambda x: (x.get("articulos_ventana",0), x.get("medios_ventana",0)), reverse=True)
+
 def clasifica_topicos(reg: dict[str, Any]) -> tuple[list[str], dict[str,str], dict[str,str], list[str]]:
     fragmentos=_fragmentos_editoriales(reg)
     encontrados=[]; evidencia={}; confianza={}; descartados=[]
@@ -2239,7 +2489,9 @@ def clasifica(reg: dict[str, Any]) -> dict[str, Any]:
         "pertinente": bool(pertinencia.get("valido")), "tipo_cobertura": pertinencia.get("tipo"),
         "pertinencia_confianza": pertinencia.get("confianza"), "pertinencia_puntaje": pertinencia.get("puntaje",0),
         "pertinencia_evidencia": pertinencia.get("evidencia",""), "pertinencia_motivos": pertinencia.get("motivos",[]),
-        "fenomeno":fenomeno,"fenomeno_label":LABELS["fenomeno"].get(fenomeno,fenomeno),"fenomeno_evidencia":fen_ev,"fenomeno_confianza":fen_conf,"fenomenos_descartados":fen_desc,
+        "fenomeno":fenomeno,"fenomeno_label":LABELS["fenomeno"].get(fenomeno,fenomeno),
+        "fenomeno_base":fenomeno,"fenomeno_base_label":LABELS["fenomeno"].get(fenomeno,fenomeno),"fenomeno_origen":"regla",
+        "fenomeno_evidencia":fen_ev,"fenomeno_confianza":fen_conf,"fenomenos_descartados":fen_desc,
         "naturaleza":naturaleza,"naturaleza_label":LABELS["naturaleza"].get(naturaleza,naturaleza),
         "precedentes":precedentes,"precedentes_label":[LABELS["precedentes"].get(x,x) for x in precedentes],"precedentes_evidencia":prec_ev,"precedentes_confianza":prec_conf,"precedentes_descartados":prec_desc,
         "topicos":topicos,"topicos_label":[LABELS["topicos"].get(x,x) for x in topicos],"topicos_evidencia":top_ev,"topicos_confianza":top_conf,"topicos_descartados":top_desc,
@@ -2310,11 +2562,13 @@ def carga_estado() -> dict[str, Any]:
     if estado.get("esquema") != ESQUEMA_ESTADO:
         # Conserva vistos para no reenviar correos, pero fuerza revisión de descartes antiguos.
         estado = {"vistos": estado.get("vistos", []), "rotacion_fuentes": estado.get("rotacion_fuentes", 0),
+                  "fenomenos_dinamicos": estado.get("fenomenos_dinamicos", {}),
                   "esquema": ESQUEMA_ESTADO, "procesados": {}, "pendientes": {},
                   "migracion_pendiente": True}
     estado.setdefault("vistos", [])
     estado.setdefault("procesados", {})
     estado.setdefault("pendientes", {})
+    estado.setdefault("fenomenos_dinamicos", {})
     estado.setdefault("esquema", ESQUEMA_ESTADO)
     return estado
 
@@ -2460,7 +2714,7 @@ def calcula_metricas(prensa: list[dict[str, Any]], social: list[dict[str, Any]],
     c24 = ahora - timedelta(hours=24)
     c48 = ahora - timedelta(hours=48)
     c5 = ahora - timedelta(days=5)
-    uaf_prensa_publica = [r for r in uaf if not r.get("fuente_institucional")]
+    uaf_prensa_publica = list(uaf)
     cur = [r for r in uaf_prensa_publica if (parsea_fecha(r.get("fecha_hora")) or datetime.min.replace(tzinfo=TZ_CL)) >= c24]
     prev = [r for r in uaf_prensa_publica if c48 <= (parsea_fecha(r.get("fecha_hora")) or datetime.min.replace(tzinfo=TZ_CL)) < c24]
     five = [r for r in uaf_prensa_publica if (parsea_fecha(r.get("fecha_hora")) or datetime.min.replace(tzinfo=TZ_CL)) >= c5]
@@ -2478,6 +2732,7 @@ def calcula_metricas(prensa: list[dict[str, Any]], social: list[dict[str, Any]],
             "tipos_medio_24h": ranking(cur, "tipo_medio"),
             "medios_ranking_24h": ranking(cur, "medio"),
             "sujetos_obligados_24h": ranking(cur, "sujetos_obligados", LABELS["sujetos"]),
+            "ultima_mencion_24h": ({"fecha": cur[0].get("fecha"), "fecha_hora": cur[0].get("fecha_hora"), "medio": cur[0].get("medio"), "titulo": cur[0].get("titulo"), "link": cur[0].get("link")} if cur else None),
             "detalle": cur[:20],
         },
         "uaf_total": len(uaf), "uaf_prensa": len(uaf), "uaf_social": 0,
@@ -2669,10 +2924,12 @@ def ejecutar(modo: str) -> int:
         estado["procesados"][rid] = {"revisado": revisado_iso, "estado": estado_val, "url": r.get("link", "")}
 
     prensa = mezcla_historico(previos.get("prensa", []), aceptados)
+    fenomenos_dinamicos = aplica_fenomenos_dinamicos(prensa, estado, ahora_cl())
+    aceptados_ids_corrida = {id_registro(r.get("link", ""), r.get("titulo", "")) for r in aceptados}
     vistos = set(estado.get("vistos", []))
     nuevos = []
     for r in prensa:
-        if r["id"] not in vistos and r in aceptados:
+        if r["id"] not in vistos and r["id"] in aceptados_ids_corrida:
             r["nuevo"] = modo == "rapido" and not migracion
             r["incorporado_conciliacion"] = modo == "conciliacion"
             r["incorporado_migracion"] = migracion
@@ -2712,6 +2969,7 @@ def ejecutar(modo: str) -> int:
         "version_motor": VERSION_MONITOR, "modo_ejecucion": modo,
         "ventana": {"dias": dias, "hoy": ahora.strftime("%Y-%m-%d"), "largo": VENTANA_DIAS},
         "metricas": metricas, "prensa": prensa, "social": [], "nuevos": len([x for x in nuevos if x.get("nuevo")]),
+        "fenomenos_dinamicos": fenomenos_dinamicos,
         "consultas": len(CONSULTAS_UAF) + len(CONSULTAS_CONTEXTO) + len(consultas_site(modo)),
         "candidatos_pendientes": pendientes_final,
         "descartes_resumen": dict(descartes), "muestras_descartes": muestras_descartes,
@@ -2732,6 +2990,7 @@ def ejecutar(modo: str) -> int:
             "urls_excluidas_editorialmente": len(carga_exclusiones_editoriales()),
             "extorsion_secuestro_confirmadas": sum(1 for r in prensa if "extorsion_secuestro" in r.get("precedentes", [])),
             "menciones_extorsion_secuestro_descartadas": sum(1 for r in prensa if any("secuestro" in x or "extors" in x for x in r.get("precedentes_descartados", []))),
+            "fenomenos_dinamicos_activos": len(fenomenos_dinamicos),
         },
         "cobertura_tecnica": {
             "cuerpos_extraidos": sum(1 for r in prensa if r.get("cuerpo_extraido")),
@@ -2748,6 +3007,8 @@ def ejecutar(modo: str) -> int:
             "reclasifica_historico": True,
             "clasificacion_contextual_delitos": True,
             "clasificacion_contextual_integral": True,
+            "deteccion_fenomenos_dinamicos": True,
+            "registro_fenomenos_dinamicos": len(estado.get("fenomenos_dinamicos", {})),
             "coincidencia_lexica_estricta": True,
             "incluye_contexto_laft": INCLUIR_CONTEXTO_LAFT,
             "umbral_extorsion_secuestro": "mención central o término + apoyo contextual",
