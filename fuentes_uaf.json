@@ -1,21 +1,15 @@
 {
-  "descripcion": "Catálogo editable de fuentes. Los registros reemplazan o amplían el catálogo incorporado en monitor_uaf.py.",
+  "descripcion": "Catálogo editable de fuentes externas. www.uaf.cl se excluye deliberadamente del monitoreo y del dashboard.",
   "fuentes": [
-    {
-      "nombre": "Unidad de Análisis Financiero",
-      "dominio": "uaf.cl",
-      "tipo": "institucional",
-      "prioridad": 10,
-      "oficial": true,
-      "secciones": ["https://www.uaf.cl/es-cl/noticias"]
-    },
     {
       "nombre": "Estrategia Antilavado",
       "dominio": "estrategiaantilavado.cl",
       "tipo": "institucional",
       "prioridad": 10,
       "oficial": true,
-      "secciones": ["https://www.estrategiaantilavado.cl/es-cl/lista-noticia/"]
+      "secciones": [
+        "https://www.estrategiaantilavado.cl/es-cl/lista-noticia/"
+      ]
     },
     {
       "nombre": "Servicio Nacional de Aduanas",
@@ -23,7 +17,9 @@
       "tipo": "institucional",
       "prioridad": 9,
       "oficial": true,
-      "secciones": ["https://www.aduana.cl/noticias/aduana/2012-04-10/131546.html"]
+      "secciones": [
+        "https://www.aduana.cl/noticias/aduana/2012-04-10/131546.html"
+      ]
     },
     {
       "nombre": "Tesorería General de la República",
@@ -31,7 +27,9 @@
       "tipo": "institucional",
       "prioridad": 8,
       "oficial": true,
-      "secciones": ["https://www.tgr.gob.cl/noticias/"]
+      "secciones": [
+        "https://www.tgr.gob.cl/noticias/"
+      ]
     },
     {
       "nombre": "Superintendencia de Pensiones",
@@ -39,7 +37,9 @@
       "tipo": "institucional",
       "prioridad": 8,
       "oficial": true,
-      "secciones": ["https://www.spensiones.cl/portal/institucional/594/w3-propertyvalue-5936.html"]
+      "secciones": [
+        "https://www.spensiones.cl/portal/institucional/594/w3-propertyvalue-5936.html"
+      ]
     },
     {
       "nombre": "Superintendencia de Casinos de Juego",
@@ -47,7 +47,10 @@
       "tipo": "institucional",
       "prioridad": 9,
       "oficial": true,
-      "secciones": ["https://www.scj.gob.cl/noticias_scj/", "https://www.scj.gob.cl/noticias/"]
+      "secciones": [
+        "https://www.scj.gob.cl/noticias_scj/",
+        "https://www.scj.gob.cl/noticias/"
+      ]
     },
     {
       "nombre": "Reporte Minero",
@@ -55,7 +58,9 @@
       "tipo": "sectorial",
       "prioridad": 6,
       "oficial": false,
-      "secciones": ["https://www.reporteminero.cl/"]
+      "secciones": [
+        "https://www.reporteminero.cl/"
+      ]
     },
     {
       "nombre": "ANFACH",
@@ -63,7 +68,9 @@
       "tipo": "gremial",
       "prioridad": 6,
       "oficial": false,
-      "secciones": ["https://www.anfach.cl/gremio/"]
+      "secciones": [
+        "https://www.anfach.cl/gremio/"
+      ]
     },
     {
       "nombre": "Canal 9",
@@ -71,7 +78,9 @@
       "tipo": "regional",
       "prioridad": 5,
       "oficial": false,
-      "secciones": ["https://www.canal9.cl/"]
+      "secciones": [
+        "https://www.canal9.cl/"
+      ]
     },
     {
       "nombre": "El América",
@@ -79,7 +88,9 @@
       "tipo": "regional",
       "prioridad": 5,
       "oficial": false,
-      "secciones": ["https://elamerica.cl/"]
+      "secciones": [
+        "https://elamerica.cl/"
+      ]
     },
     {
       "nombre": "EnLaLinea.cl",
@@ -87,7 +98,9 @@
       "tipo": "regional",
       "prioridad": 5,
       "oficial": false,
-      "secciones": ["https://www.enlalinea.cl/"]
+      "secciones": [
+        "https://www.enlalinea.cl/"
+      ]
     }
   ]
 }

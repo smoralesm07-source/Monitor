@@ -1,266 +1,133 @@
-# Monitor UAF Chile · versión 7.0
+# Monitor UAF Chile · versión 7.4
 
-Actualización del motor de monitoreo para aumentar la cobertura de menciones a la **Unidad de Análisis Financiero de Chile (UAF)** en prensa, servicios públicos, organismos supervisores, medios sectoriales, gremiales y regionales.
+Esta versión está orientada exclusivamente a publicaciones externas que mencionen explícitamente a la **Unidad de Análisis Financiero de Chile o UAF** durante los últimos 30 días.
 
-Esta versión mantiene el `index.html` actual y el esquema principal de `datos.json`, pero reemplaza el proceso de recolección por una arquitectura de **doble motor**.
+## Cambios principales
 
-## 1. Cambios principales
+### 1. Exclusión total de `www.uaf.cl`
 
-### Monitoreo rápido
+El dominio `uaf.cl` se elimina del catálogo, del descubrimiento y del histórico mostrado. La aplicación también depura publicaciones antiguas de ese portal que pudieran permanecer en `datos.json`.
 
-Se ejecuta cada 15 minutos y busca publicaciones recientes mediante:
+Se mantiene `estrategiaantilavado.cl`, porque es un sitio distinto y puede contener noticias externas o interinstitucionales relevantes.
 
-- Google News RSS;
-- Bing News RSS;
-- DuckDuckGo como apoyo;
-- RSS y Atom propios de las fuentes;
-- news-sitemaps y sitemaps generales;
-- portadas y secciones directas;
-- consultas `site:` para fuentes prioritarias.
+### 2. Capa de publicaciones verificadas
 
-Su objetivo es detectar y avisar oportunamente nuevas menciones. El correo continúa enviándose únicamente en este modo y solo para nuevas menciones válidas de la UAF de Chile.
+El archivo `semillas_verificadas.json` contiene las publicaciones que ya fueron comprobadas en el barrido exhaustivo. Mientras estén dentro de la ventana de 30 días, deben aparecer en el dashboard aunque:
 
-### Conciliación exhaustiva
+- el buscador deje de indexarlas;
+- el medio active un muro de pago;
+- `robots.txt` bloquee la descarga;
+- la mención UAF esté únicamente dentro del cuerpo;
+- el título no contenga las palabras UAF o Unidad de Análisis Financiero.
 
-Se ejecuta una vez al día y reconstruye los últimos 30 días mediante:
+Esta capa incluye, entre otras, la columna de **La Tercera del 3 de julio, “Inteligencia financiera para un mundo geoeconómico”**, y el reportaje de BioBioChile sobre economías ilícitas.
 
-- consultas segmentadas en bloques de cinco días;
-- revisión de todas las fuentes configuradas;
-- más consultas `site:` por dominio;
-- mayor recorrido de sitemaps e índices;
-- reintento de artículos bloqueados, incompletos o previamente descartados;
-- lectura de hasta 1.100 candidatos, según el presupuesto disponible.
+### 3. Control automático de integridad
 
-Las publicaciones recuperadas por conciliación se incorporan al dashboard, pero **no generan correos históricos**.
+Después de cada ejecución, GitHub Actions comprueba que:
 
-### Auditoría de cobertura
+- todas las semillas verificadas que siguen dentro de los últimos 30 días estén en `datos.json`;
+- no exista ninguna publicación de `uaf.cl`;
+- `datos.json` sea válido;
+- el motor publicado corresponda a la versión 7.4.
 
-La nueva página `auditoria.html` muestra:
+Si falta una publicación verificada, el workflow falla antes de publicar un dashboard incompleto y muestra las URL faltantes.
 
-- fuentes configuradas y efectivamente consultadas;
-- canales utilizados por fuente;
-- cantidad de resultados descubiertos;
-- errores de conexión o extracción;
-- candidatos pendientes de validación;
-- motivos de descarte;
-- última conciliación ejecutada;
-- menciones localizadas únicamente dentro del cuerpo del artículo.
+### 4. Búsqueda más profunda
 
-Una vez publicado, se abre en:
+La conciliación diaria incorpora:
 
-```text
-https://TU_USUARIO.github.io/monitor-uaf/auditoria.html
-```
+- consultas exactas por cada dominio configurado;
+- consultas por la sigla UAF;
+- frases de acción como “informó a la UAF”, “antecedentes a la UAF”, “alertas de la UAF”, “facultades de la UAF” y “fortalecer a la UAF”;
+- bloques temporales de cinco días;
+- RSS, Atom, sitemaps, índices de sitemaps, portadas y secciones;
+- Google News, Bing News y DuckDuckGo;
+- reintentos de artículos bloqueados o incompletos.
 
-### Catálogo ampliado
+El modo rápido sigue funcionando durante el día y la conciliación realiza la reconstrucción profunda una vez al día.
 
-El motor incluye prensa nacional y económica, radios, televisión, medios jurídicos, regionales y fuentes institucionales. Entre las incorporaciones están:
+## Archivos que debes subir
 
-- Servicio Nacional de Aduanas;
-- Tesorería General de la República;
-- Superintendencia de Pensiones;
-- Superintendencia de Casinos de Juego;
-- Estrategia Antilavado;
-- Reporte Minero;
-- ANFACH;
-- Canal 9;
-- El América;
-- EnLaLinea.cl.
-
-El catálogo puede modificarse sin tocar Python mediante `fuentes_uaf.json`.
-
-### Trazabilidad de decisiones
-
-Cada artículo queda en una de estas situaciones:
+Conserva tu `index.html` actual y reemplaza o agrega:
 
 ```text
-descubierto → descargado → cuerpo extraído → UAF Chile validada → publicado
+monitor_uaf.py
+construye_sitio.py
+fuentes_uaf.json
+semillas_verificadas.json
+casos_control.json
+auditoria.html
+test_monitor.py
+.gitignore
+.github/workflows/monitor.yml
 ```
 
-O registra un motivo técnico o analítico, por ejemplo:
+No subas la carpeta `__pycache__` ni archivos `.pyc`.
+
+## Instalación
+
+1. Sube los archivos indicados directamente a la raíz del repositorio.
+2. Reemplaza `.github/workflows/monitor.yml`.
+3. Comprueba que no exista otro workflow antiguo, como `actualizar-monitor.yml`.
+4. Abre **Actions → Actualizar y publicar monitor UAF → Run workflow**.
+5. Ejecuta:
 
 ```text
-bloqueado_robots
-cuerpo_insuficiente
-error_descarga
-pendiente_pdf
-uaf_ambigua_o_extranjera
-sin_mencion_ni_contexto_laft
-fuera_de_ventana
+modo: conciliacion
+reiniciar_estado: false
+probar_correo: false
 ```
 
-Los candidatos accionables se conservan en `datos.json` y aparecen en la página de auditoría.
+La migración cambia el esquema del estado, vuelve a conciliar las publicaciones y elimina del dashboard los registros anteriores de `uaf.cl`. Durante esa primera migración no envía correos históricos.
 
-## 2. Archivos del paquete
+## Validación esperada
 
-| Archivo | Acción |
-|---|---|
-| `monitor_uaf.py` | Reemplazar el motor anterior |
-| `construye_sitio.py` | Reemplazar |
-| `fuentes_uaf.json` | Agregar en la raíz |
-| `casos_control.json` | Agregar en la raíz |
-| `auditoria.html` | Agregar en la raíz |
-| `test_monitor.py` | Reemplazar |
-| `.github/workflows/monitor.yml` | Reemplazar el workflow actual |
-| `.gitignore` | Reemplazar o combinar |
-| `index.html` | **Conservar el dashboard actual** |
-
-## 3. Instalación en GitHub
-
-### Desde el navegador
-
-1. Descomprime el paquete.
-2. En GitHub abre el repositorio y selecciona **Code → Add file → Upload files**.
-3. Sube a la raíz:
-   - `monitor_uaf.py`
-   - `construye_sitio.py`
-   - `fuentes_uaf.json`
-   - `casos_control.json`
-   - `auditoria.html`
-   - `test_monitor.py`
-   - `.gitignore`
-4. Abre la carpeta `.github/workflows` del repositorio.
-5. Reemplaza el workflow existente por `monitor.yml` incluido en este paquete.
-6. Conserva `index.html` sin cambios.
-7. Confirma el commit.
-
-### Evitar workflows duplicados
-
-Debe quedar **un solo workflow de actualización**. Si el repositorio todavía contiene archivos como:
+En el registro del paso **Comprobar salida del monitor** deben aparecer mensajes similares a:
 
 ```text
-.github/workflows/actualizar-monitor.yml
-.github/workflows/actualizar-monitor.yaml
+versión: 7.4-barrido-profundo-sin-uaf-cl
+semillas activas esperadas: N
+semillas faltantes: 0
 ```
 
-elimínalos o desactívalos después de subir `monitor.yml`. Dos workflows provocarían ejecuciones duplicadas, competencia por la rama `monitor-state` y posibles correos repetidos.
+El número `N` cambia diariamente, porque las publicaciones salen automáticamente de la ventana móvil de 30 días.
 
-## 4. Primera ejecución
+## Configuración del dashboard
 
-1. Abre **Actions → Actualizar y publicar monitor UAF**.
-2. Pulsa **Run workflow**.
-3. Selecciona `conciliacion`.
-4. Mantén `reiniciar_estado` en `false`.
-5. Ejecuta.
-
-La primera conciliación puede volver a revisar artículos antiguos porque la versión 7 cambia el esquema técnico del estado. Conserva la lista de noticias ya vistas para reducir avisos duplicados y no envía correo por la recuperación histórica.
-
-Cuando termine en verde:
-
-1. abre GitHub Pages;
-2. actualiza con `Ctrl + F5` o `Cmd + Shift + R`;
-3. revisa `auditoria.html`;
-4. confirma que `version_motor` sea:
+El workflow establece:
 
 ```text
-7.0-doble-motor-conciliacion
+MONITOR_DASHBOARD_SOLO_UAF=true
 ```
 
-## 5. Programación automática
+Por tanto, el listado principal muestra solamente publicaciones con mención validada de UAF Chile. Los artículos sobre lavado de activos que no mencionan a la UAF ya no se mezclan con el resultado principal.
 
-El workflow ejecuta:
+## Actualización de publicaciones verificadas
 
-```text
-Monitoreo rápido: minutos 07, 22, 37 y 52 de cada hora
-Conciliación: una vez al día, 07:13 UTC
+Cuando se compruebe manualmente una nueva noticia omitida, agrégala a `semillas_verificadas.json` con:
+
+```json
+{
+  "fecha": "2026-07-30",
+  "medio": "Nombre del medio",
+  "titulo": "Título",
+  "tema": "Resumen del tema",
+  "evidencia_uaf": "Descripción breve de la mención explícita a la UAF de Chile.",
+  "link": "https://...",
+  "verificada": true,
+  "pais": "Chile"
+}
 ```
 
-La hora UTC corresponde aproximadamente a la madrugada en Chile. GitHub puede iniciar una ejecución programada algunos minutos después cuando existe congestión.
+Esto permite que la publicación quede respaldada mientras permanezca dentro de los últimos 30 días.
 
-## 6. Correo electrónico
-
-Los secretos anteriores se mantienen:
-
-| Secreto | Uso |
-|---|---|
-| `MONITOR_CORREO_ACTIVO` | `true` para habilitar |
-| `MONITOR_SMTP_SERVIDOR` | Servidor SMTP |
-| `MONITOR_SMTP_PUERTO` | Puerto SMTP |
-| `MONITOR_SMTP_SEGURIDAD` | `starttls`, `ssl` o `ninguna` |
-| `MONITOR_SMTP_USUARIO` | Cuenta remitente |
-| `MONITOR_SMTP_CLAVE` | Clave de aplicación o token SMTP |
-| `MONITOR_DESTINATARIOS` | Correos separados por coma |
-| `MONITOR_REMITENTE_NOMBRE` | Nombre visible del remitente |
-| `MONITOR_MINIMO_AVISO` | Mínimo de menciones para avisar |
-| `MONITOR_SILENCIO_MINUTOS` | Periodo de silencio configurado |
-| `MONITOR_SOLO_UAF` | Mantener en `true` |
-
-Para probarlo manualmente, ejecuta el workflow con `probar_correo = true`.
-
-## 7. Comandos de validación
-
-### Pruebas unitarias sin internet
+## Pruebas locales
 
 ```bash
 python -m unittest -v test_monitor.py
-```
-
-### Validar catálogo
-
-```bash
 python monitor_uaf.py --validar-fuentes
-```
-
-### Probar una noticia concreta
-
-```bash
-python monitor_uaf.py --probar-url "URL"
-```
-
-### Ejecutar los casos reales de regresión
-
-```bash
 python monitor_uaf.py --probar-casos-control
 ```
 
-Este último comando utiliza las URL de `casos_control.json`, entre ellas las dos publicaciones que la app había omitido:
-
-- Diario Financiero: *Más allá de la UAF…*
-- BioBioChile: *Del robo al lavado de dinero…*
-
-No se ejecuta automáticamente en cada actualización porque depende de disponibilidad externa, paywalls y cambios de HTML de los medios.
-
-### Ejecutar localmente
-
-```bash
-python monitor_uaf.py --modo rapido
-python monitor_uaf.py --modo conciliacion
-python construye_sitio.py
-```
-
-## 8. Variables avanzadas
-
-| Variable | Rápido | Conciliación |
-|---|---:|---:|
-| `MONITOR_PRESUPUESTO_SEG` | 780 | 3000 |
-| `MONITOR_MAX_ENRIQUECER` | 280 | 1100 |
-| `MONITOR_MAX_SITE_QUERIES` | 48 | 140 |
-| `MONITOR_BARRIDO_MIN_FUENTE` | 2 | 6 |
-| `MONITOR_DIAS_PROCESADOS` | 45 | 45 |
-| `MONITOR_MAX_GOOGLE_RESOLVER` | 120 | — |
-| `MONITOR_MAX_GOOGLE_RESOLVER_CONCILIACION` | — | 420 |
-
-Los valores ya están incluidos en el workflow y no requieren secretos.
-
-## 9. Qué revisar en la auditoría
-
-Después de la primera conciliación, observa especialmente:
-
-- `Fuentes consultadas / fuentes configuradas`;
-- fuentes obligatorias con estado `No consultada`;
-- errores repetidos de `robots.txt`, HTTP o DNS;
-- candidatos con `cuerpo_insuficiente`;
-- menciones `uaf_ambigua_o_extranjera`;
-- cantidad de artículos incorporados por conciliación;
-- menciones encontradas solo en el cuerpo.
-
-Una cobertura completa no significa que todas las fuentes respondan en cada ejecución. La conciliación diaria, la rotación rápida y los reintentos permiten acumular cobertura sin exceder los límites de GitHub Actions.
-
-## 10. Limitaciones
-
-- Los buscadores no garantizan entregar la totalidad de sus índices.
-- Los medios pueden cambiar sus sitemaps, HTML, paywalls o reglas de rastreo.
-- La app respeta `robots.txt` para la lectura de artículos.
-- Los PDF se registran como pendientes cuando no existe texto HTML accesible.
-- La clasificación automática debe validarse antes de utilizar una noticia en un informe institucional.
-- GitHub Pages y `datos.json` son públicos cuando el repositorio o el sitio son públicos; no deben contener información reservada.
+La versión 7.4 incluye 13 pruebas automáticas, incluida la comprobación específica de La Tercera del 3 de julio y la exclusión de `uaf.cl`.

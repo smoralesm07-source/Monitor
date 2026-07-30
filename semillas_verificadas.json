@@ -1,0 +1,376 @@
+{
+  "descripcion": "Publicaciones verificadas manualmente para garantizar cobertura del barrido profundo. Se usan como respaldo cuando buscadores, paywalls o robots impiden redescubrir o leer el artículo.",
+  "actualizado": "2026-07-30",
+  "semillas": [
+    {
+      "fecha": "2026-07-28",
+      "medio": "Diario Constitucional",
+      "titulo": "Proyecto busca sancionar el lucro, la publicidad y la facilitación del comercio sexual ajeno",
+      "tema": "Proyecto modifica la Ley 19.913, que creó la Unidad de Análisis Financiero, para abordar la explotación sexual comercial.",
+      "evidencia_uaf": "La publicación menciona expresamente a la Unidad de Análisis Financiero de Chile y la Ley 19.913.",
+      "link": "https://www.diarioconstitucional.cl/2026/07/28/proyecto-busca-sancionar-el-lucro-la-publicidad-y-la-facilitacion-del-comercio-sexual-ajeno/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-28",
+      "medio": "El América",
+      "titulo": "Senador Velásquez impulsa fuertes sanciones contra empresas que faciliten el lavado de activos",
+      "tema": "Propuesta legislativa para reforzar sanciones y obligaciones de información a la UAF.",
+      "evidencia_uaf": "La nota menciona expresamente obligaciones de reporte e información a la UAF de Chile.",
+      "link": "https://elamerica.cl/2026/07/28/senador-velasquez-impulsa-fuertes-sanciones-contra-empresas-que-faciliten-el-lavado-de-activos/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-28",
+      "medio": "EnLaLinea.cl",
+      "titulo": "Senador Velásquez impulsa fuertes sanciones contra empresas que faciliten el lavado de activos",
+      "tema": "Republicación de la propuesta para sancionar empresas facilitadoras de lavado y reforzar reportes a la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente a la UAF de Chile.",
+      "link": "https://www.enlalinea.cl/senador-velasquez-impulsa-fuertes-sanciones-contra-empresas-que-faciliten-el-lavado-de-activos/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-25",
+      "medio": "La Tercera / Pulso",
+      "titulo": "La ingeniería de detalle para la implementación de la megarreforma",
+      "tema": "Implementación de la reforma tributaria y acceso de la UAF y el SII a información de activos en el extranjero.",
+      "evidencia_uaf": "La nota menciona expresamente a la UAF de Chile en relación con acceso a información financiera.",
+      "link": "https://www.latercera.com/pulso/noticia/la-ingenieria-de-detalle-para-la-implementacion-de-la-megarreforma/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-24",
+      "medio": "Emol",
+      "titulo": "Carolina Rudnick: perfil de la abogada y directora de Fundación Libera",
+      "tema": "Perfil profesional que menciona su experiencia previa en relaciones internacionales de la UAF.",
+      "evidencia_uaf": "El cuerpo del artículo menciona expresamente la experiencia de Carolina Rudnick en la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.emol.com/noticias/Nacional/2026/07/24/1206613/carolina-rudnick-fundacion-libera-perfil.html",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-24",
+      "medio": "Ex-Ante",
+      "titulo": "Quién es Juan Pablo Rodríguez, el exsubsecretario de Hacienda que renunció por test positivo de droga",
+      "tema": "Perfil que recuerda negociaciones sobre secreto bancario y facultades de la UAF.",
+      "evidencia_uaf": "El cuerpo de la nota menciona expresamente facultades de la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.ex-ante.cl/economia/quien-es-juan-pablo-rodriguez-el-exsubsecretario-de-hacienda-que-renuncio-por-test-positivo-de-droga/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-24",
+      "medio": "T13 / Ex-Ante",
+      "titulo": "Quién es Juan Pablo Rodríguez, el exsubsecretario de Hacienda que renunció por test positivo de droga",
+      "tema": "Republicación del perfil con referencia a facultades de la UAF y secreto bancario.",
+      "evidencia_uaf": "El artículo menciona expresamente a la UAF de Chile.",
+      "link": "https://www.t13.cl/amp/noticia/ex-ante/politica/quien-juan-pablo-rodriguez-exsubsecretario-hacienda-renuncio-por-test-positivo-24-7-2026",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-23",
+      "medio": "Superintendencia de Pensiones",
+      "titulo": "Cuenta Pública Participativa 2026 de la Superintendencia de Pensiones",
+      "tema": "Cuenta pública con asistencia del director subrogante de la UAF, Marcelo Contreras.",
+      "evidencia_uaf": "La publicación institucional menciona expresamente al director subrogante de la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.spensiones.cl/portal/institucional/594/w3-article-17095.html",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-23",
+      "medio": "Diario Financiero",
+      "titulo": "Deloitte asegura que la banca local destina hasta US$400 millones anuales a prevenir lavado",
+      "tema": "Costos de prevención de lavado y solicitud de mayor retroalimentación y coordinación con la UAF.",
+      "evidencia_uaf": "El artículo menciona expresamente la coordinación permanente con la UAF de Chile.",
+      "link": "https://www.df.cl/mercados/banca-fintech/deloitte-asegura-que-la-banca-local-destina-hasta-us-400-millones-anuales",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-22",
+      "medio": "Tesorería General de la República",
+      "titulo": "Cuenta Pública de TGR destaca avances en modernización y cobranza",
+      "tema": "Cuenta pública con participación de autoridades de la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente a autoridades de la Unidad de Análisis Financiero de Chile.",
+      "link": "https://tgr.gob.cl/2026/07/22/cuenta-publica-de-tgr-destaca-avances-en-el-proceso-de-modernizacion-y-acciones-de-cobranza/noticias/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-22",
+      "medio": "Diario Oficial",
+      "titulo": "Acepta renuncia voluntaria de don Carlos Pavez Tolosa como director de la Unidad de Análisis Financiero",
+      "tema": "Decreto que acepta la renuncia del director de la UAF con efecto desde el 22 de junio de 2026.",
+      "evidencia_uaf": "El decreto menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.diariooficial.interior.gob.cl/publicaciones/2026/07/22/44505/01/2837841.pdf",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-21",
+      "medio": "Estrategia Antilavado",
+      "titulo": "Superintendencia de Casinos de Juego realiza Cuenta Pública Participativa",
+      "tema": "Cuenta pública que destaca trabajo conjunto y fiscalizaciones coordinadas con la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente el trabajo conjunto con la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.estrategiaantilavado.cl/es-cl/detalle-noticia/?id=6001",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-16",
+      "medio": "La Tercera",
+      "titulo": "La falsa alerta de fraude y la supuesta amenaza del Tren de Aragua que terminó con ocho imputados por robar $370 millones a notario",
+      "tema": "Investigación por transferencias fraccionadas que habrían buscado evitar alertas de la UAF.",
+      "evidencia_uaf": "El cuerpo del artículo menciona expresamente que las transferencias se habrían fraccionado para evitar alertas de la UAF de Chile.",
+      "link": "https://www.latercera.com/nacional/noticia/la-falsa-alerta-de-fraude-y-la-supuesta-amenaza-del-tren-de-aragua-que-termino-con-ocho-imputados-por-robar-370-millones-a-notario/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-15",
+      "medio": "La Tercera / Pulso",
+      "titulo": "Controlador de Grupo Sartor pidió a Fiscalía citar a declarar a gerentes de Toesca y Grupo Araucana",
+      "tema": "Solicitud para que Fiscalía requiera a la UAF reportes de operaciones sospechosas.",
+      "evidencia_uaf": "La nota menciona expresamente una solicitud de reportes a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.latercera.com/pulso/noticia/controlador-de-grupo-sartor-pidio-a-fiscalia-citar-a-declarar-a-gerentes-de-toesca-y-grupo-araucana/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-09",
+      "medio": "Estrategia Antilavado",
+      "titulo": "Designan coordinadores de la Mesa Intersectorial sobre Lavado de Activos y Financiamiento del Terrorismo",
+      "tema": "Designación de coordinadores de una instancia intersectorial coordinada por la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente que la instancia es coordinada por la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.estrategiaantilavado.cl/es-cl/detalle-noticia/?id=6000",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-09",
+      "medio": "T13",
+      "titulo": "Compliance preventivo: por qué las empresas también deben vigilar riesgos en sus organizaciones",
+      "tema": "Contenido sobre cumplimiento preventivo y obligaciones de empresas y sujetos obligados ante la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente a la UAF de Chile y obligaciones de cumplimiento.",
+      "link": "https://www.t13.cl/noticia/tendencias/compliance-preventivo-por-las-empresas-tambien-deben-vigilar-riesgos-organizaciones",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-09",
+      "medio": "Reporte Minero",
+      "titulo": "Aduana de Valparaíso detecta contrabando de más de un millón de monedas de $10 con destino a China",
+      "tema": "Aduanas informó los antecedentes del contrabando de monedas a la UAF.",
+      "evidencia_uaf": "La nota menciona expresamente que los antecedentes fueron informados a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.reporteminero.cl/noticia/noticias/2026/07/aduana-valparaiso-contrabando-monedas-10-pesos-china",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-08",
+      "medio": "Estrategia Antilavado",
+      "titulo": "UAF y CMF realizan jornada sobre aplicación de la Circular N.º 62",
+      "tema": "Jornada sobre obligaciones de reporte y aplicación de normativa antilavado.",
+      "evidencia_uaf": "La publicación menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.estrategiaantilavado.cl/es-cl/detalle-noticia/?id=5999",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-08",
+      "medio": "La Tercera",
+      "titulo": "Economía ilícita y apuestas en línea",
+      "tema": "Carta que cita una respuesta de la UAF sobre plataformas de apuestas en línea y sujetos obligados.",
+      "evidencia_uaf": "La carta menciona expresamente una respuesta de la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.latercera.com/cartas-al-director/noticia/economia-ilicita-y-apuestas-en-linea/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-08",
+      "medio": "La Tercera",
+      "titulo": "El impacto de la economía ilícita",
+      "tema": "Editorial que plantea reforzar capacidades de organismos como la UAF.",
+      "evidencia_uaf": "El editorial menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.latercera.com/editorial/noticia/el-impacto-de-la-economia-ilicita/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-07",
+      "medio": "BioBioChile",
+      "titulo": "La intención encubierta tras los $10 millones en monedas de $10 que intentaron sacar de Chile a China",
+      "tema": "Análisis del contrabando de monedas y remisión de antecedentes a la UAF.",
+      "evidencia_uaf": "El cuerpo de la noticia menciona expresamente el envío de antecedentes a la UAF de Chile.",
+      "link": "https://www.biobiochile.cl/noticias/economia/actualidad-economica/2026/07/07/la-intencion-encubierta-tras-los-10-millones-en-monedas-de-10-que-intentaron-sacar-de-chile-a-china.shtml",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-06",
+      "medio": "Servicio Nacional de Aduanas",
+      "titulo": "Singular caso de contrabando: intentaron exportar 1.039.785 monedas de $10",
+      "tema": "Comunicado oficial sobre contrabando de monedas cuyos antecedentes fueron informados a la UAF.",
+      "evidencia_uaf": "El comunicado menciona expresamente que el caso fue informado a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.aduana.cl/singular-caso-de-contrabando-intentaron-exportar-1-039-785-de-monedas/aduana/2026-07-06/141023.html",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-06",
+      "medio": "Fiscalía de Chile",
+      "titulo": "Fiscalía de Valparaíso investiga contrabando de monedas de $10 como chatarra",
+      "tema": "Investigación del contrabando de monedas y comunicación de antecedentes a la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente que los antecedentes fueron comunicados a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.fiscaliadechile.cl/actualidad/noticias/fiscalia-de-valparaiso-investiga-contrabando-de-monedas-de-10-pesos-como",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-06",
+      "medio": "ANFACH",
+      "titulo": "Más de un millón de monedas de $10 fueron incautadas en Valparaíso cuando eran exportadas como chatarra",
+      "tema": "Publicación gremial sobre contrabando de monedas y remisión de antecedentes a la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.anfach.cl/gremio/mas-de-un-millon-de-monedas-de-10-fueron-incautadas-en-valparaiso-cuando-eran-exportadas-como-chatarra/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-06",
+      "medio": "Diario Financiero",
+      "titulo": "El costo de los mercados ilícitos",
+      "tema": "Editorial sobre mercados ilícitos que aborda reportes recibidos y limitaciones estructurales de la UAF.",
+      "evidencia_uaf": "El editorial menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.df.cl/opinion/editorial/el-costo-de-los-mercados-ilicitos",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-04",
+      "medio": "24 Horas",
+      "titulo": "Peculiar contrabando en Valparaíso: más de un millón de monedas de $10 iban rumbo a China",
+      "tema": "Cobertura del contrabando de monedas y remisión de antecedentes a la UAF.",
+      "evidencia_uaf": "La nota menciona expresamente que los antecedentes fueron informados a la UAF de Chile.",
+      "link": "https://www.24horas.cl/actualidad/nacional/peculiar-contrabando-valparaiso-millon-monedas-10-pesos-china",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-04",
+      "medio": "T13",
+      "titulo": "Intentaron exportar más de un millón de monedas de $10 ocultas como chatarra rumbo a China",
+      "tema": "Cobertura del contrabando de monedas y reporte a la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.t13.cl/amp/noticia/nacional/intentaron-exportar-mas-millon-monedas-10-ocultas-como-chatarra-rumbo-china-4-7-2026",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-04",
+      "medio": "La Tercera",
+      "titulo": "Aduanas detecta contrabando de más de un millón de monedas chilenas en cargamento de chatarra con destino a China",
+      "tema": "Caso de contrabando de monedas reportado a la UAF.",
+      "evidencia_uaf": "El cuerpo de la noticia menciona expresamente que el caso fue informado a la UAF de Chile.",
+      "link": "https://www.latercera.com/nacional/noticia/aduanas-detecta-contrabando-de-mas-de-un-millon-de-monedas-chilenas-en-cargamento-de-chatarra-con-destino-a-china/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-04",
+      "medio": "BioBioChile",
+      "titulo": "Intentaron sacar desde Chile hacia China más de $10 millones en monedas de $10",
+      "tema": "Contrabando de monedas y remisión de antecedentes a la UAF.",
+      "evidencia_uaf": "La nota menciona expresamente que los antecedentes fueron remitidos a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.biobiochile.cl/noticias/nacional/region-de-valparaiso/2026/07/04/insolito-intentaron-sacar-desde-chile-hacia-china-mas-de-10-millones-en-monedas-de-10-pesos.shtml",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-04",
+      "medio": "Cooperativa",
+      "titulo": "Intentaron mandar a China un millón de monedas de $10",
+      "tema": "Cobertura del contrabando y comunicación del caso a la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.cooperativa.cl/noticias/pais/policial/inaudito-intentaron-mandar-a-china-un-millon-de-monedas-de-10-pesos/2026-07-04/132557.html",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-04",
+      "medio": "Meganoticias",
+      "titulo": "Frustran millonario contrabando de más de un millón de monedas de $10 con destino a China",
+      "tema": "Cobertura del contrabando de monedas y comunicación de antecedentes a la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.meganoticias.cl/nacional/526181-mas-de-un-millon-de-monedas-10-frustran-millonario-contrabando-destino-china-04-07-2026.html",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-04",
+      "medio": "Canal 9",
+      "titulo": "Intentaron sacar desde Chile hacia China más de $10 millones en monedas de $10",
+      "tema": "Republicación regional del caso de contrabando informado a la UAF.",
+      "evidencia_uaf": "La publicación menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.canal9.cl/episodios/2026/07/04/insolito-intentaron-sacar-desde-chile-hacia-china-mas-de-10-millones-en-monedas-de-10-pesos",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-03",
+      "medio": "BioBioChile",
+      "titulo": "Del robo al lavado de dinero: así funciona el círculo vicioso de las economías ilícitas en Chile",
+      "tema": "Reportaje sobre el tránsito desde delitos base al lavado y el rol de la UAF en la detección de flujos ilícitos.",
+      "evidencia_uaf": "El cuerpo del reportaje menciona expresamente a la Unidad de Análisis Financiero de Chile como actor relevante en la detección de flujos financieros ilícitos.",
+      "link": "https://www.biobiochile.cl/noticias/economia/actualidad-economica/2026/07/03/del-robo-al-lavado-de-dinero-asi-funciona-el-circulo-vicioso-de-las-economias-ilicitas-en-chile.shtml",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-03",
+      "medio": "La Tercera",
+      "titulo": "Inteligencia financiera para un mundo geoeconómico",
+      "tema": "Columna sobre inteligencia financiera y la necesidad de fortalecer institucionalmente a la UAF.",
+      "evidencia_uaf": "El cuerpo de la columna menciona expresamente a la Unidad de Análisis Financiero de Chile y plantea fortalecer sus capacidades.",
+      "link": "https://www.latercera.com/opinion/noticia/inteligencia-financiera-para-un-mundo-geoeconomico/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-03",
+      "medio": "Diario Financiero",
+      "titulo": "El tributo de lo prohibido",
+      "tema": "Carta sobre juegos de azar y mercados ilícitos que contrasta casinos fiscalizados por la SCJ y la UAF con apuestas en línea.",
+      "evidencia_uaf": "La carta menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.df.cl/opinion/cartas/el-tributo-de-lo-prohibido",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-07-02",
+      "medio": "La Tercera / Pulso",
+      "titulo": "Las 45 propuestas del gran empresariado contra el negocio del crimen organizado",
+      "tema": "Propuestas de la CPC, incluida la ampliación de facultades e intercambio de información de la UAF.",
+      "evidencia_uaf": "La nota menciona expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.latercera.com/pulso/noticia/las-45-propuestas-del-gran-empresariado-contra-el-negocio-del-crimen-organizado/",
+      "verificada": true,
+      "pais": "Chile"
+    },
+    {
+      "fecha": "2026-06-30",
+      "medio": "Diario Financiero",
+      "titulo": "Más allá de la UAF: conocer la ruta del dinero es tarea de todos",
+      "tema": "Columna del exdirector Carlos Pavez sobre inteligencia financiera y responsabilidad compartida en el seguimiento de la ruta del dinero.",
+      "evidencia_uaf": "El título y el cuerpo mencionan expresamente a la Unidad de Análisis Financiero de Chile.",
+      "link": "https://www.df.cl/opinion/columnistas/mas-alla-de-la-uaf-conocer-la-ruta-del-dinero-es-tarea-de-todos",
+      "verificada": true,
+      "pais": "Chile"
+    }
+  ]
+}

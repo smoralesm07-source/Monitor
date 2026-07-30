@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Monitor UAF Chile · motor v7.0 con doble ciclo de búsqueda.
+"""Monitor UAF Chile · motor v7.4 con barrido profundo verificable.
 
 Modos:
   rapido         Monitoreo oportuno para ejecutar cada 15 minutos.
@@ -92,11 +92,12 @@ BITACORA = BASE / "monitor.log"
 CONFIG = BASE / "config.json"
 FUENTES_ARCHIVO = BASE / "fuentes_uaf.json"
 CASOS_CONTROL_ARCHIVO = BASE / "casos_control.json"
+SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
 
-VERSION_MONITOR = "7.3-fix-serializacion-json"
-ESQUEMA_ESTADO = 4
+VERSION_MONITOR = "7.4-barrido-profundo-sin-uaf-cl"
+ESQUEMA_ESTADO = 5
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
-UA = "Mozilla/5.0 (compatible; MonitorUAF/7.0; +https://github.com/)"
+UA = "Mozilla/5.0 (compatible; MonitorUAF/7.4; +https://github.com/)"
 UA_ROBOTS = "MonitorUAF"
 
 CONFIG_EJEMPLO = {
@@ -152,6 +153,8 @@ MAX_SITEMAPS_POR_FUENTE = env_int("MONITOR_MAX_SITEMAPS_FUENTE", 10)
 MAX_URLS_SITEMAP = env_int("MONITOR_MAX_URLS_SITEMAP", 450)
 MIN_POR_FUENTE = env_int("MONITOR_BARRIDO_MIN_FUENTE", 2)
 MODO_ENV = os.getenv("MONITOR_MODO", "rapido").strip().lower()
+SOLO_MENCIONES_UAF_DASHBOARD = env_bool("MONITOR_DASHBOARD_SOLO_UAF", True)
+DOMINIOS_EXCLUIDOS_PUBLICACION = {"uaf.cl"}
 
 INICIO = time.monotonic()
 
@@ -205,7 +208,6 @@ FUENTES_PREDETERMINADAS: list[dict[str, Any]] = [
     {"nombre": "Diario El Día", "dominio": "diarioeldia.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.diarioeldia.cl/"]},
     {"nombre": "El Pingüino", "dominio": "elpinguino.com", "tipo": "regional", "prioridad": 5, "secciones": ["https://elpinguino.com/"]},
     # Instituciones y servicios públicos
-    {"nombre": "Unidad de Análisis Financiero", "dominio": "uaf.cl", "tipo": "institucional", "prioridad": 10, "oficial": True, "secciones": ["https://www.uaf.cl/es-cl/noticias"]},
     {"nombre": "Estrategia Antilavado", "dominio": "estrategiaantilavado.cl", "tipo": "institucional", "prioridad": 10, "oficial": True, "secciones": ["https://www.estrategiaantilavado.cl/es-cl/lista-noticia/"]},
     {"nombre": "Fiscalía de Chile", "dominio": "fiscaliadechile.cl", "tipo": "institucional", "prioridad": 9, "oficial": True, "secciones": ["https://www.fiscaliadechile.cl/actualidad/noticias"]},
     {"nombre": "Diario Oficial", "dominio": "diariooficial.interior.gob.cl", "tipo": "institucional", "prioridad": 8, "oficial": True, "secciones": ["https://www.diariooficial.interior.gob.cl/"]},
@@ -247,6 +249,7 @@ def cargar_fuentes() -> list[dict[str, Any]]:
             fuentes = list(por_dominio.values())
         except Exception as exc:
             print(f"! fuentes_uaf.json inválido: {exc}", file=sys.stderr)
+    fuentes = [f for f in fuentes if normaliza_dominio(f.get("dominio", "")) not in DOMINIOS_EXCLUIDOS_PUBLICACION]
     for f in fuentes:
         f["dominio"] = normaliza_dominio(f["dominio"])
         f.setdefault("nombre", f["dominio"])
@@ -312,6 +315,13 @@ CONSULTAS_UAF = [
     '"facultades de la UAF" Chile',
     '"experiencia en la UAF" Chile',
     '"reportes de operaciones sospechosas" UAF Chile',
+    '"mencionó a la UAF" Chile',
+    '"mencion a la UAF" Chile',
+    '"fortalecer a la UAF" Chile',
+    '"coordinación con la UAF" Chile',
+    '"coordinacion con la UAF" Chile',
+    '"fiscalizados por la UAF" Chile',
+    '"respuesta de la UAF" Chile',
 ]
 
 CONSULTAS_CONTEXTO = [
@@ -1043,21 +1053,78 @@ def consultas_segmentadas(ahora: datetime) -> list[str]:
     cursor = inicio
     while cursor <= ahora.date():
         fin = min(cursor + timedelta(days=5), ahora.date() + timedelta(days=1))
-        consultas.append(f'"Unidad de Análisis Financiero" after:{cursor.isoformat()} before:{fin.isoformat()}')
-        consultas.append(f'"UAF" "lavado de activos" after:{cursor.isoformat()} before:{fin.isoformat()}')
+        periodo = f"after:{cursor.isoformat()} before:{fin.isoformat()}"
+        consultas.append(f'"Unidad de Análisis Financiero" Chile {periodo}')
+        consultas.append(f'"UAF" Chile {periodo}')
+        consultas.append(f'("informó a la UAF" OR "antecedentes a la UAF" OR "alertas de la UAF" OR "fortalecer a la UAF") {periodo}')
         cursor = fin
     return consultas
 
 
 def consultas_site(modo: str) -> list[tuple[str, str]]:
-    fuentes = FUENTES if modo == "conciliacion" else [f for f in FUENTES if int(f.get("prioridad", 0)) >= 8]
+    fuentes = [f for f in FUENTES if f["dominio"] not in DOMINIOS_EXCLUIDOS_PUBLICACION]
+    if modo != "conciliacion":
+        fuentes = [f for f in fuentes if int(f.get("prioridad", 0)) >= 8]
     pares: list[tuple[str, str]] = []
+    # Primero cubre todos los dominios con la frase exacta. Evita que el límite
+    # deje fuera a medios regionales e institucionales de menor prioridad.
     for f in fuentes:
         d = f["dominio"]
         pares.append((d, f'site:{d} "Unidad de Análisis Financiero"'))
-        if modo == "conciliacion" or int(f.get("prioridad", 0)) >= 9:
-            pares.append((d, f'site:{d} UAF ("lavado de activos" OR "operaciones sospechosas" OR "antecedentes a la UAF")'))
+    # Luego profundiza en las fuentes más relevantes con sigla y frases de acción.
+    for f in fuentes:
+        if modo != "conciliacion" and int(f.get("prioridad", 0)) < 9:
+            continue
+        d = f["dominio"]
+        pares.append((d, f'site:{d} "UAF" Chile'))
+        pares.append((d, f'site:{d} ("informó a la UAF" OR "antecedentes a la UAF" OR "alertas de la UAF" OR "facultades de la UAF" OR "fortalecer a la UAF")'))
     return pares[:MAX_SITE_QUERIES]
+
+
+def descubre_semillas_verificadas() -> list[dict[str, Any]]:
+    """Carga publicaciones verificadas como respaldo de cobertura.
+
+    No sustituye el rastreo automático: garantiza que una noticia ya verificada
+    no desaparezca porque el buscador dejó de indexarla, el medio activó un
+    paywall o robots.txt impidió leer nuevamente su cuerpo.
+    """
+    if not SEMILLAS_ARCHIVO.exists():
+        return []
+    try:
+        data = json.loads(SEMILLAS_ARCHIVO.read_text(encoding="utf-8"))
+        items = data.get("semillas", []) if isinstance(data, dict) else data
+    except Exception as exc:
+        log(f"! semillas_verificadas.json inválido: {type(exc).__name__}: {exc}")
+        return []
+    salida: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("link"):
+            continue
+        url = url_canonica(item["link"])
+        host = dominio_url(url)
+        if host in DOMINIOS_EXCLUIDOS_PUBLICACION or host not in DOMINIOS_CHILENOS:
+            continue
+        fecha_dt = parsea_fecha(item.get("fecha"), url)
+        corte_dashboard = ahora_cl().date() - timedelta(days=max(0, VENTANA_DIAS - 1))
+        if not fecha_dt or fecha_dt.date() < corte_dashboard or fecha_dt.date() > ahora_cl().date():
+            continue
+        evidencia = limpia_texto(item.get("evidencia_uaf", ""))
+        tema = limpia_texto(item.get("tema", ""))
+        salida.append({
+            "titulo": limpia_texto(item.get("titulo", "")),
+            "resumen": tema,
+            "texto_enriquecido": evidencia,
+            "evidencia_uaf": evidencia,
+            "link": url,
+            "fecha_dt": fecha_dt,
+            "medio": item.get("medio") or (fuente_para_host(host) or {}).get("nombre", host),
+            "origen_busqueda": "semilla_verificada",
+            "origenes_busqueda": ["semilla_verificada"],
+            "verificacion_manual": True,
+            "cuerpo_extraido": False,
+            "estado_extraccion": "respaldo_verificado",
+        })
+    return salida
 
 
 def descubre_agregadores(modo: str) -> list[dict[str, Any]]:
@@ -1243,6 +1310,8 @@ def resuelve_google_news(reg: dict[str, Any]) -> dict[str, Any]:
 
 def puntaje_candidato(reg: dict[str, Any], modo: str) -> int:
     texto = normaliza((reg.get("titulo") or "") + " " + (reg.get("resumen") or ""))
+    if reg.get("verificacion_manual"):
+        return 10_000
     host = dominio_url(reg.get("link", ""))
     fuente = fuente_para_host(host)
     p = int(fuente.get("prioridad", 3) if fuente else 1)
@@ -1309,7 +1378,7 @@ def normaliza_candidatos(registros: list[dict[str, Any]], modo: str) -> list[dic
             continue
         host = dominio_url(url)
         fuente = fuente_para_host(host)
-        if not fuente or host in DOMINIOS_VETADOS:
+        if not fuente or host in DOMINIOS_VETADOS or host in DOMINIOS_EXCLUIDOS_PUBLICACION:
             continue
         fecha_dt = reg.get("fecha_dt") or parsea_fecha("", url)
         if fecha_dt and not dentro_ventana(fecha_dt):
@@ -1415,7 +1484,10 @@ def enriquece_articulo(reg: dict[str, Any]) -> dict[str, Any]:
 
 
 def texto_registro(reg: dict[str, Any]) -> str:
-    return " ".join([reg.get("titulo", ""), reg.get("resumen", ""), reg.get("texto_enriquecido", "")])[:MAX_TEXTO_ANALISIS]
+    return " ".join([
+        reg.get("titulo", ""), reg.get("resumen", ""),
+        reg.get("texto_enriquecido", ""), reg.get("evidencia_uaf", ""),
+    ])[:MAX_TEXTO_ANALISIS]
 
 
 def ventanas_uaf(texto: str, ancho: int = 520) -> list[str]:
@@ -1429,6 +1501,10 @@ def analiza_uaf(reg: dict[str, Any]) -> tuple[bool, str, list[str], int, int]:
     if not menciones:
         return False, "sin_mencion", ["sin mención UAF"], 0, 0
     host = dominio_url(reg.get("link", ""))
+    if host in DOMINIOS_EXCLUIDOS_PUBLICACION:
+        return False, "excluida", ["dominio excluido del dashboard"], 0, len(menciones)
+    if reg.get("verificacion_manual"):
+        return True, "alta", ["publicación verificada en barrido profundo", "mención UAF confirmada"], 25, len(menciones)
     fuente = fuente_para_host(host)
     puntajes: list[tuple[int, list[str]]] = []
     for m in menciones:
@@ -1456,7 +1532,7 @@ def analiza_uaf(reg: dict[str, Any]) -> tuple[bool, str, list[str], int, int]:
         if extranjeros:
             score -= 8; motivos.append("contexto de unidad extranjera")
         # UAF institucional se acepta incluso en noticias de actividades sin términos LA/FT.
-        if host in {"uaf.cl", "estrategiaantilavado.cl"}:
+        if host == "estrategiaantilavado.cl":
             score += 5; motivos.append("sitio del sistema antilavado chileno")
         puntajes.append((score, motivos))
     mejor, motivos = max(puntajes, key=lambda x: x[0])
@@ -1484,10 +1560,16 @@ def origen_mencion_uaf(reg: dict[str, Any], es_uaf: bool) -> str:
         return "bajada"
     if MENCION_UAF_RE.search(reg.get("texto_enriquecido", "")):
         return "cuerpo"
+    if MENCION_UAF_RE.search(reg.get("evidencia_uaf", "")):
+        return "verificacion_manual"
     return "texto"
 
 
 def es_pertinente(reg: dict[str, Any]) -> bool:
+    if dominio_url(reg.get("link", "")) in DOMINIOS_EXCLUIDOS_PUBLICACION:
+        return False
+    if reg.get("verificacion_manual"):
+        return True
     uaf = analiza_uaf(reg)[0]
     if uaf:
         return True
@@ -1616,6 +1698,8 @@ def debe_revisar(c: dict[str, Any], estado: dict[str, Any], modo: str) -> bool:
 
 
 def razon_descarte(reg: dict[str, Any]) -> str:
+    if dominio_url(reg.get("link", "")) in DOMINIOS_EXCLUIDOS_PUBLICACION:
+        return "dominio_excluido"
     estado = reg.get("estado_extraccion", "")
     if estado and estado != "completo" and not reg.get("titulo") and not reg.get("resumen"):
         return estado
@@ -1659,6 +1743,8 @@ def registro_publicable(reg: dict[str, Any], modo: str) -> dict[str, Any]:
         "origen_busqueda": (r.get("origenes_busqueda") or [r.get("origen_busqueda", "desconocido")])[0],
         "origenes_busqueda": sorted(set(r.get("origenes_busqueda") or [r.get("origen_busqueda", "desconocido")])),
         "incorporado_por": modo,
+        "verificacion_manual": bool(r.get("verificacion_manual")),
+        "evidencia_uaf": limpia_texto(r.get("evidencia_uaf", ""))[:1000],
     })
     r.pop("_puntaje", None)
     r.pop("amp_url", None)
@@ -1671,11 +1757,13 @@ def calidad_registro(r: dict[str, Any]) -> int:
 
 
 def mezcla_historico(previos: list[dict[str, Any]], nuevos: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    corte = ahora_cl() - timedelta(days=VENTANA_DIAS)
+    corte_fecha = ahora_cl().date() - timedelta(days=max(0, VENTANA_DIAS - 1))
     por_id: dict[str, dict[str, Any]] = {}
     for r in previos + nuevos:
+        if dominio_url(r.get("link", "")) in DOMINIOS_EXCLUIDOS_PUBLICACION:
+            continue
         fecha_dt = parsea_fecha(r.get("fecha_hora") or r.get("fecha"))
-        if fecha_dt and fecha_dt < corte:
+        if fecha_dt and fecha_dt.date() < corte_fecha:
             continue
         rid = r.get("id") or id_registro(r.get("link", ""), r.get("titulo", ""))
         r["id"] = rid
@@ -1841,7 +1929,9 @@ def ejecutar(modo: str) -> int:
     previos = carga_previos()
     log(f"Inicio motor {VERSION_MONITOR} · modo={modo} · fuentes={len(FUENTES)} · migracion={migracion}")
 
-    descubiertos = descubre_agregadores(modo)
+    semillas = descubre_semillas_verificadas()
+    descubiertos = list(semillas)
+    descubiertos += descubre_agregadores(modo)
     descubiertos += descubre_directo(modo, estado)
     candidatos = normaliza_candidatos(descubiertos, modo)
     candidatos_revision = [c for c in candidatos if debe_revisar(c, estado, modo)]
@@ -1869,6 +1959,13 @@ def ejecutar(modo: str) -> int:
     finally:
         ex.shutdown(wait=True, cancel_futures=True)
 
+    # Respaldo determinístico: toda semilla verificada dentro de la ventana debe
+    # llegar al dashboard aunque no haya sido seleccionada o el medio bloquee la descarga.
+    urls_enriquecidas = {url_canonica(r.get("link", "")) for r in enriquecidos}
+    for semilla in semillas:
+        if url_canonica(semilla.get("link", "")) not in urls_enriquecidas:
+            enriquecidos.append(dict(semilla))
+
     aceptados: list[dict[str, Any]] = []
     pendientes: list[dict[str, Any]] = []
     descartes: Counter[str] = Counter()
@@ -1878,10 +1975,17 @@ def ejecutar(modo: str) -> int:
         rid = id_registro(r.get("link", ""), r.get("titulo", ""))
         uaf = analiza_uaf(r)[0]
         pertinente = es_pertinente(r)
-        if pertinente:
+        if pertinente and (uaf or not SOLO_MENCIONES_UAF_DASHBOARD):
             pub = registro_publicable(r, modo)
             aceptados.append(pub)
             estado_val = "aceptado_uaf" if pub.get("uaf") else "aceptado_contexto"
+        elif pertinente:
+            motivo = "contexto_laft_sin_mencion_uaf"
+            estado_val = motivo
+            descartes[motivo] += 1
+            muestra = candidato_pendiente(r, motivo)
+            if len(muestras_descartes) < 100:
+                muestras_descartes.append(muestra)
         else:
             motivo = razon_descarte(r)
             estado_val = motivo
@@ -1950,6 +2054,9 @@ def ejecutar(modo: str) -> int:
             "pendientes_corrida": len(pendientes), "descartadas_corrida": sum(descartes.values()),
             "fuentes_configuradas": len(FUENTES), "fuentes_consultadas": sum(1 for x in cobertura_fuentes if x.get("consultada")),
             "ultima_conciliacion": estado.get("ultima_conciliacion"), "migracion_estado": migracion,
+            "semillas_verificadas_activas": len(semillas),
+            "dashboard_solo_menciones_uaf": SOLO_MENCIONES_UAF_DASHBOARD,
+            "dominios_excluidos": sorted(DOMINIOS_EXCLUIDOS_PUBLICACION),
         },
         "cobertura_tecnica": {
             "cuerpos_extraidos": sum(1 for r in prensa if r.get("cuerpo_extraido")),
@@ -1960,6 +2067,8 @@ def ejecutar(modo: str) -> int:
             "fuentes_minimas_consultadas": sum(1 for h in DOMINIOS_MINIMOS if _COBERTURA.get(h, {}).get("consultada")),
             "articulos_en_memoria": len(estado.get("procesados", {})), "respeta_robots": RESPETA_ROBOTS,
             "retencion_procesados_dias": RETENCION_PROCESADOS_DIAS,
+            "semillas_verificadas": len(semillas),
+            "excluye_uaf_cl": True,
             "segundos_corrida": round(time.monotonic() - INICIO, 1),
         },
     }

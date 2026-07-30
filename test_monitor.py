@@ -17,6 +17,7 @@ class MonitorUAFV7Tests(unittest.TestCase):
             self.assertIn(dominio, M.DOMINIOS_CHILENOS)
         self.assertIn("eldinamo.cl", M.DOMINIOS_CHILENOS)
         self.assertNotIn("eldynamo.cl", M.DOMINIOS_CHILENOS)
+        self.assertNotIn("uaf.cl", M.DOMINIOS_CHILENOS)
 
     def test_deteccion_uaf_chile_nombre_completo(self):
         texto = (
@@ -130,6 +131,33 @@ class MonitorUAFV7Tests(unittest.TestCase):
         for clave in ("uaf_portada", "uaf_total", "volumen", "por_dia", "fenomenos", "topicos"):
             self.assertIn(clave, m)
         self.assertEqual(m["uaf_total"], 1)
+
+
+    def test_serializacion_json_datetime(self):
+        dato = {"fecha_dt": datetime(2026, 7, 30, 9, 15)}
+        texto = M.json.dumps(dato, default=M.json_default)
+        self.assertIn("2026-07-30T09:15:00", texto)
+
+    def test_semillas_verificadas_garantizan_latercera_3_julio(self):
+        semillas = M.descubre_semillas_verificadas()
+        self.assertGreaterEqual(len(semillas), 30)
+        url = M.url_canonica("https://www.latercera.com/opinion/noticia/inteligencia-financiera-para-un-mundo-geoeconomico/")
+        reg = next((x for x in semillas if x.get("link") == url), None)
+        self.assertIsNotNone(reg)
+        self.assertTrue(reg.get("verificacion_manual"))
+        self.assertTrue(M.analiza_uaf(reg)[0])
+
+    def test_historico_excluye_portal_uaf(self):
+        ahora = M.ahora_cl()
+        registros = [
+            {"id":"uaf","fecha":ahora.strftime("%Y-%m-%d"),"fecha_hora":ahora.isoformat(),
+             "titulo":"UAF institucional","link":"https://www.uaf.cl/es-cl/noticia-detalle?id=1","uaf":True},
+            {"id":"lt","fecha":ahora.strftime("%Y-%m-%d"),"fecha_hora":ahora.isoformat(),
+             "titulo":"La Tercera menciona UAF","link":"https://www.latercera.com/opinion/noticia/prueba/","uaf":True},
+        ]
+        mezcla = M.mezcla_historico(registros, [])
+        self.assertEqual(len(mezcla), 1)
+        self.assertEqual(M.dominio_url(mezcla[0]["link"]), "latercera.com")
 
     def test_ip_privada_bloqueada(self):
         self.assertFalse(M.ip_publica("127.0.0.1"))
