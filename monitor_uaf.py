@@ -122,7 +122,7 @@ def _env_int(nombre, defecto):
 # Ventanas y presupuestos (ajustables por variables de entorno).
 VENTANA_DIAS = _env_int("MONITOR_VENTANA_DIAS", 30)
 TIMEOUT = _env_int("MONITOR_TIMEOUT", 20)
-PRESUPUESTO_SEGUNDOS = _env_int("MONITOR_PRESUPUESTO_SEG", 720)
+PRESUPUESTO_SEGUNDOS = _env_int("MONITOR_PRESUPUESTO_SEG", 840)
 HILOS = max(1, min(16, _env_int("MONITOR_HILOS", 8)))
 MAX_BYTES_RESPUESTA = _env_int("MONITOR_MAX_BYTES", 4_000_000)
 MAX_TEXTO_ANALISIS = _env_int("MONITOR_MAX_TEXTO", 20000)
@@ -2474,6 +2474,137 @@ def _registra_cobertura(host, canal, n=1):
     fila["canales"][canal] = fila["canales"].get(canal, 0) + n
 
 
+# ─────────────────────────────────────────────────────────────
+# Canal directo: páginas de etiquetas temáticas de cada medio
+# ─────────────────────────────────────────────────────────────
+
+# Cada medio organiza sus notas en páginas de etiqueta/tag/categoría.  Estas
+# páginas son el ÍNDICE REAL de lo que publicaron, más completo que cualquier
+# feed o buscador.  Una nota que mencione a la UAF en el cuerpo pero cuyo
+# titular no diga «UAF» puede no aparecer en ninguna consulta de Google News;
+# sin embargo, sí aparece en la página de etiqueta «lavado-de-activos» del
+# medio, porque el editor la clasificó bajo esa categoría.
+
+PAGINAS_ETIQUETA = [
+    # La Tercera / Pulso
+    ("latercera.com", "https://www.latercera.com/etiqueta/uaf/"),
+    ("latercera.com", "https://www.latercera.com/etiqueta/lavado-de-activos/"),
+    ("latercera.com", "https://www.latercera.com/etiqueta/crimen-organizado/"),
+    ("latercera.com", "https://www.latercera.com/etiqueta/operacion-tokio/"),
+    ("latercera.com", "https://www.latercera.com/etiqueta/tren-de-aragua/"),
+    ("latercera.com", "https://www.latercera.com/etiqueta/secreto-bancario/"),
+    # BioBioChile
+    ("biobiochile.cl", "https://www.biobiochile.cl/lista/categorias/economia"),
+    ("biobiochile.cl", "https://www.biobiochile.cl/lista/categorias/nacional"),
+    # Emol
+    ("emol.com", "https://www.emol.com/tag/1038099/lavado-de-activos.html"),
+    ("emol.com", "https://www.emol.com/tag/1165730/uaf.html"),
+    # El Mostrador
+    ("elmostrador.cl", "https://www.elmostrador.cl/noticias/pais/"),
+    ("elmostrador.cl", "https://www.elmostrador.cl/mercados/"),
+    # CIPER
+    ("ciperchile.cl", "https://www.ciperchile.cl/category/economia/"),
+    # Diario Financiero
+    ("df.cl", "https://www.df.cl/mercados"),
+    ("df.cl", "https://www.df.cl/regulacion"),
+    # CNN Chile
+    ("cnnchile.com", "https://www.cnnchile.com/economia/"),
+    ("cnnchile.com", "https://www.cnnchile.com/pais/"),
+    # Cooperativa
+    ("cooperativa.cl", "https://www.cooperativa.cl/noticias/pais/judicial/"),
+    # T13
+    ("t13.cl", "https://www.t13.cl/etiqueta/lavado-de-activos"),
+    ("t13.cl", "https://www.t13.cl/etiqueta/uaf"),
+    # 24 Horas
+    ("24horas.cl", "https://www.24horas.cl/etiqueta/lavado-de-activos"),
+    # Ex-Ante
+    ("ex-ante.cl", "https://www.ex-ante.cl/categoria/economia/"),
+    # Interferencia
+    ("interferencia.cl", "https://interferencia.cl/tags/lavado-de-activos"),
+    # CHV Noticias
+    ("chilevision.cl", "https://www.chilevision.cl/noticias/economia"),
+    # Meganoticias
+    ("meganoticias.cl", "https://www.meganoticias.cl/economia/"),
+]
+
+
+def _extrae_enlaces_pagina(html_text, url_base):
+    """Extrae todos los enlaces de artículo de una página HTML de etiqueta/categoría."""
+    enlaces = {}
+    patron_a = re.compile(r'<a[^>]+href=["\x27]([^"\x27]+)["\x27][^>]*>(.*?)</a>',
+                           flags=re.I | re.S)
+    for m in patron_a.finditer(html_text):
+        href, interior = m.group(1), m.group(2)
+        href = urllib.parse.urljoin(url_base, html_mod.unescape(href))
+        if not url_http(href):
+            continue
+        host = dominio_url(href)
+        if not nivel_dominio_chileno(host):
+            continue
+        # Filtrar solo enlaces que parecen artículos (tienen slug largo o /noticia/)
+        ruta = urllib.parse.urlsplit(href).path
+        if len(ruta) < 25:
+            continue
+        if any(x in ruta for x in ("/etiqueta/", "/tag/", "/lista/", "/canal/",
+                                    "/autor/", "/categoria/", "/category/",
+                                    "/compra-", "/contacto", "/politica-privacidad",
+                                    "/newsletters", "/suscri")):
+            continue
+        titulo = limpia_html(interior).strip()
+        if not titulo or len(titulo) < 12 or len(titulo) > 500:
+            continue
+        if href not in enlaces or len(titulo) > len(enlaces[href]):
+            enlaces[href] = titulo
+    return enlaces
+
+
+def recolecta_etiquetas():
+    """Lee las páginas de etiquetas temáticas de cada medio prioritario.
+
+    Estas páginas son el índice editorial de artículos por tema.  Muchas notas
+    que mencionan a la UAF en el cuerpo aparecen aquí bajo etiquetas como
+    «lavado-de-activos» o «crimen-organizado» aunque su titular no diga UAF.
+    Es la vía más confiable para no perder artículos.
+    """
+    salida = []
+    procesados_urls = set()
+
+    def tarea(host, url):
+        def _ejecuta():
+            if tiempo_agotado(reserva=200):
+                return []
+            try:
+                contenido, final, headers = descarga(url, max_bytes=3_000_000, reintentos=1)
+                texto = _decodifica(contenido, headers)
+            except Exception as e:
+                log(f"  ! etiqueta {host}: {type(e).__name__}")
+                return []
+            enlaces = _extrae_enlaces_pagina(texto, final)
+            registros = []
+            for href, titulo in enlaces.items():
+                if href in procesados_urls:
+                    continue
+                procesados_urls.add(href)
+                h = dominio_url(href)
+                registros.append({
+                    "titulo": titulo[:500],
+                    "link": href,
+                    "medio": NOMBRE_POR_DOMINIO.get(h, h),
+                    "resumen": "",
+                    "fecha_dt": None,
+                    "origen": "Página de etiqueta",
+                    "fuente_url": f"https://{h}",
+                    "origen_busqueda": f"etiqueta:{host}",
+                })
+            return registros
+        return _ejecuta
+
+    tareas = [tarea(host, url) for host, url in PAGINAS_ETIQUETA]
+    salida = en_paralelo(tareas, "etiquetas temáticas")
+    log(f"  · Páginas de etiquetas temáticas → {len(salida)} artículos de {len(PAGINAS_ETIQUETA)} páginas")
+    return salida
+
+
 def recolecta_retrospectiva():
     """Consultas retrospectivas para atrapar notas que se escaparon del descubrimiento inicial.
 
@@ -2527,6 +2658,7 @@ def recolecta_prensa(estado, cuerpos_previos):
     crudos += recolecta_feeds_medios(estado)
     crudos += recolecta_sitemaps(estado)
     crudos += recolecta_uaf_oficial()
+    crudos += recolecta_etiquetas()
     crudos += recolecta_retrospectiva()
 
     candidatos = {}
