@@ -2,10 +2,7 @@ name: Actualizar y publicar monitor UAF
 
 on:
   schedule:
-    # Monitoreo rápido cada 15 minutos.
     - cron: "7,22,37,52 * * * *"
-    # Conciliación histórica diaria. 07:13 UTC equivale aproximadamente
-    # a 03:13 en Chile durante horario de invierno.
     - cron: "13 7 * * *"
   workflow_dispatch:
     inputs:
@@ -14,9 +11,7 @@ on:
         type: choice
         required: true
         default: rapido
-        options:
-          - rapido
-          - conciliacion
+        options: [rapido, conciliacion]
       reiniciar_estado:
         description: "Ignorar el histórico guardado y partir de cero"
         type: boolean
@@ -39,6 +34,8 @@ jobs:
     timeout-minutes: 58
     permissions:
       contents: write
+    env:
+      PYTHONUNBUFFERED: "1"
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v6
@@ -49,6 +46,20 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Verificar estructura antes del barrido
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "Directorio actual: $(pwd)"
+          echo "Archivos disponibles:"
+          find . -maxdepth 3 -type f | sort
+          for archivo in monitor_uaf.py test_monitor.py construye_sitio.py index.html fuentes_uaf.json auditoria.html; do
+            if [[ ! -f "$archivo" ]]; then
+              echo "::error title=Archivo faltante::$archivo debe estar en la raíz del repositorio, no dentro de monitor_uaf_v7/"
+              exit 2
+            fi
+          done
 
       - name: Determinar modo y presupuesto
         shell: bash
@@ -63,14 +74,14 @@ jobs:
           fi
           echo "MODO=$MODO" >> "$GITHUB_ENV"
           if [[ "$MODO" == "conciliacion" ]]; then
-            echo "MONITOR_PRESUPUESTO_SEG=3000" >> "$GITHUB_ENV"
+            echo "MONITOR_PRESUPUESTO_SEG=2400" >> "$GITHUB_ENV"
             echo "MONITOR_HILOS=8" >> "$GITHUB_ENV"
-            echo "MONITOR_MAX_ENRIQUECER=1100" >> "$GITHUB_ENV"
-            echo "MONITOR_MAX_ENRIQUECER_CONCILIACION=1100" >> "$GITHUB_ENV"
-            echo "MONITOR_MAX_SITE_QUERIES=140" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_ENRIQUECER=900" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_ENRIQUECER_CONCILIACION=900" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_SITE_QUERIES=120" >> "$GITHUB_ENV"
             echo "MONITOR_BARRIDO_MIN_FUENTE=6" >> "$GITHUB_ENV"
-            echo "MONITOR_MAX_SITEMAPS_FUENTE=12" >> "$GITHUB_ENV"
-            echo "MONITOR_MAX_URLS_SITEMAP=650" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_SITEMAPS_FUENTE=10" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_URLS_SITEMAP=550" >> "$GITHUB_ENV"
           else
             echo "MONITOR_PRESUPUESTO_SEG=780" >> "$GITHUB_ENV"
             echo "MONITOR_HILOS=8" >> "$GITHUB_ENV"
@@ -101,9 +112,11 @@ jobs:
           rm -rf estado_previo
 
       - name: Validar motor y catálogo
+        shell: bash
         run: |
-          python3 -m unittest -v test_monitor.py
-          python3 monitor_uaf.py --validar-fuentes
+          set -o pipefail
+          python3 -m unittest -v test_monitor.py 2>&1 | tee validacion.log
+          python3 -u monitor_uaf.py --validar-fuentes 2>&1 | tee -a validacion.log
 
       - name: Probar correo
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.probar_correo == true }}
@@ -116,7 +129,10 @@ jobs:
           MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
           MONITOR_DESTINATARIOS: ${{ secrets.MONITOR_DESTINATARIOS }}
           MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
-        run: python3 monitor_uaf.py --probar-correo
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -u monitor_uaf.py --probar-correo 2>&1 | tee monitor.log
 
       - name: Ejecutar monitor
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
@@ -132,11 +148,32 @@ jobs:
           MONITOR_MINIMO_AVISO: ${{ secrets.MONITOR_MINIMO_AVISO }}
           MONITOR_SILENCIO_MINUTOS: ${{ secrets.MONITOR_SILENCIO_MINUTOS }}
           MONITOR_SOLO_UAF: ${{ secrets.MONITOR_SOLO_UAF }}
-        run: python3 monitor_uaf.py --modo "$MODO"
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -u monitor_uaf.py --modo "$MODO" 2>&1 | tee monitor.log
+
+      - name: Comprobar salida del monitor
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s datos.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('datos.json')
+          d = json.loads(p.read_text(encoding='utf-8'))
+          print('datos.json:', p.stat().st_size, 'bytes')
+          print('versión:', d.get('version_motor'))
+          print('modo:', d.get('modo_ejecucion'))
+          print('publicaciones:', len(d.get('prensa', [])))
+          print('auditoría:', d.get('auditoria', {}))
+          PY
 
       - name: Construir sitio estático
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
-        run: python3 construye_sitio.py
+        run: python3 -u construye_sitio.py
 
       - name: Subir artefacto de Pages
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
@@ -163,12 +200,40 @@ jobs:
           git config user.email "monitor-uaf@users.noreply.github.com"
           git add -A
           git commit --quiet -m "Estado $MODO $(date -u +%Y-%m-%dT%H:%M:%SZ)" || exit 0
-          git push --quiet --force \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" monitor-state
+          if ! git push --quiet --force \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" monitor-state; then
+            echo "::warning title=Histórico no guardado::No se pudo actualizar monitor-state. Revisa permisos Actions/Contents y protección de ramas. El dashboard sí puede publicarse."
+          fi
+
+      - name: Mostrar diagnóstico si falla
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          echo "=== Archivos en raíz ==="
+          ls -la
+          echo "=== Últimas líneas de validación ==="
+          tail -n 80 validacion.log 2>/dev/null || true
+          echo "=== Últimas líneas del monitor ==="
+          tail -n 150 monitor.log 2>/dev/null || true
+          echo "=== Tamaños ==="
+          du -h datos.json .monitor_estado.json monitor.log validacion.log 2>/dev/null || true
+
+      - name: Adjuntar diagnóstico
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-monitor-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            monitor.log
+            validacion.log
+            datos.json
+            .monitor_estado.json
 
   publicar:
     needs: actualizar
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+    if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.probar_correo != true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
