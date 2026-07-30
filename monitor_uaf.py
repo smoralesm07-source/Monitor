@@ -3,19 +3,19 @@
 """
 monitor_uaf.py — Monitor UAF Chile · motor de vigilancia de fuentes.
 
-v6.0 «cobertura-mínima-auditable»
+v5.0 «cobertura-total-chile»
 
-Cambios principales frente a 5.0
-  1. Descubrimiento multicanal: Google News, Bing News, DuckDuckGo, Perplexity opcional,
-     GDELT DOC 2.0, RSS/Atom
+Cambios principales frente a 4.0
+  1. Descubrimiento multicanal: Google News, Bing News, GDELT DOC 2.0, RSS/Atom
      propios de cada medio (autodescubiertos), news-sitemaps declarados en
      robots.txt y el sitio institucional de la UAF.
   2. Detección UAF por proximidad: la decisión ya no se veta porque en el
      artículo aparezca la palabra «Perú» o «Panamá» en otro párrafo. Se analiza
      la ventana de texto alrededor de cada mención.
-  3. Cobertura mínima auditable: portadas directas, consultas site:, feeds y
-     sitemaps para 27 dominios obligatorios, con barrido equilibrado por fuente
-     y telemetría por canal en datos.json.
+  3. Barrido profundo rotativo: cada corrida lee el cuerpo completo de un lote
+     de artículos recientes aún no procesados, con memoria persistente, de modo
+     que en el transcurso del día se revisa prácticamente toda la producción de
+     los medios prioritarios.
   4. Red endurecida: sin SSRF (bloquea redirecciones a rangos privados), límite
      de bytes, XML sin DTD/entidades, solo http/https, respeto de robots.txt.
   5. Paralelismo con límite por dominio, caché de cuerpos y presupuesto global
@@ -28,8 +28,6 @@ Solo biblioteca estándar. Requiere Python 3.9+ (recomendado 3.11+).
   python3 monitor_uaf.py --daemon           # vigila cada 15 min
   python3 monitor_uaf.py --probar-correo    # prueba SMTP
   python3 monitor_uaf.py --diagnostico      # descubre fuentes y sale
-  python3 monitor_uaf.py --validar-fuentes  # valida catálogo mínimo
-  python3 monitor_uaf.py --probar-url URL    # prueba una noticia concreta
   python3 monitor_uaf.py --probar-deteccion "texto..."
 """
 
@@ -79,7 +77,7 @@ BITACORA = os.path.join(BASE, "monitor.log")
 CONFIG = os.path.join(BASE, "config.json")
 FUENTES_EXTRA = os.path.join(BASE, "fuentes_extra.json")
 
-VERSION_MONITOR = "6.0-cobertura-minima-auditable"
+VERSION_MONITOR = "5.1-cobertura-por-medio"
 ESQUEMA_ID = 2  # cambia si cambia la forma de calcular el id de una noticia
 
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
@@ -125,23 +123,15 @@ def _env_int(nombre, defecto):
 VENTANA_DIAS = _env_int("MONITOR_VENTANA_DIAS", 30)
 TIMEOUT = _env_int("MONITOR_TIMEOUT", 20)
 PRESUPUESTO_SEGUNDOS = _env_int("MONITOR_PRESUPUESTO_SEG", 720)
-HILOS = max(1, min(12, _env_int("MONITOR_HILOS", 6)))
+HILOS = max(1, min(16, _env_int("MONITOR_HILOS", 8)))
 MAX_BYTES_RESPUESTA = _env_int("MONITOR_MAX_BYTES", 4_000_000)
 MAX_TEXTO_ANALISIS = _env_int("MONITOR_MAX_TEXTO", 20000)
 MAX_TEXTO_GUARDADO = _env_int("MONITOR_MAX_TEXTO_GUARDADO", 4000)
-MAX_ARTICULOS_ENRIQUECER = _env_int("MONITOR_MAX_ENRIQUECER", 220)
-PRESUPUESTO_BARRIDO = _env_int("MONITOR_BARRIDO", 70)
-BARRIDO_MIN_POR_FUENTE = _env_int("MONITOR_BARRIDO_MIN_FUENTE", 2)
+MAX_ARTICULOS_ENRIQUECER = _env_int("MONITOR_MAX_ENRIQUECER", 320)
+PRESUPUESTO_BARRIDO = _env_int("MONITOR_BARRIDO", 90)
 INTERVALO_POR_HOST = float(os.getenv("MONITOR_INTERVALO_HOST", "0.9") or 0.9)
 RESPETA_ROBOTS = _env_bool("MONITOR_RESPETA_ROBOTS", True)
 TTL_ENDPOINTS_HORAS = _env_int("MONITOR_TTL_ENDPOINTS_H", 72)
-TTL_ENDPOINTS_FALLIDOS_HORAS = _env_int("MONITOR_TTL_ENDPOINTS_FALLIDOS_H", 6)
-DESCUBRE_POR_CORRIDA = _env_int("MONITOR_DESCUBRE_POR_CORRIDA", 12)
-DOMINIOS_SITE_POR_CORRIDA = _env_int("MONITOR_DOMINIOS_SITE", 8)
-DUCKDUCKGO_ACTIVO = _env_bool("MONITOR_DUCKDUCKGO_ACTIVO", True)
-PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "").strip()
-PERPLEXITY_ACTIVO = (_env_bool("MONITOR_PERPLEXITY_ACTIVO", bool(PERPLEXITY_API_KEY))
-                     and bool(PERPLEXITY_API_KEY))
 MAX_PROCESADOS = _env_int("MONITOR_MAX_PROCESADOS", 30000)
 DIAS_PROCESADOS = _env_int("MONITOR_DIAS_PROCESADOS", 21)
 
@@ -165,23 +155,27 @@ MEDIOS_CHILE = [
     ("La Segunda", "lasegunda.com", "prensa_nacional", False),
     ("Las Últimas Noticias", "lun.com", "prensa_nacional", False),
     ("La Cuarta", "lacuarta.com", "prensa_nacional", False),
-    ("Publimetro", "publimetro.cl", "prensa_nacional", False),
-    ("La Hora", "lahora.cl", "prensa_nacional", False),
+    ("Publimetro", "publimetro.cl", "prensa_nacional", True),
+    ("La Hora", "lahora.cl", "prensa_nacional", True),
+    ("La Nación", "lanacion.cl", "prensa_nacional", True),
     # Económicos y de negocios
     ("Diario Financiero", "df.cl", "economico", True),
     ("Diario Financiero", "diariofinanciero.cl", "economico", True),
     ("DF SUD", "dfsud.com", "economico", False),
     ("Estrategia", "estrategia.cl", "economico", False),
-    ("Revista Capital", "revistacapital.cl", "economico", False),
+    ("Revista Capital", "revistacapital.cl", "economico", True),
+    ("Pulso / La Tercera", "pulso.cl", "economico", False),
     ("Mundo Marítimo", "mundomaritimo.cl", "economico", False),
     # Investigación y digitales
     ("CIPER", "ciperchile.cl", "investigacion_digital", True),
     ("El Mostrador", "elmostrador.cl", "investigacion_digital", True),
     ("Ex-Ante", "ex-ante.cl", "investigacion_digital", True),
     ("Interferencia", "interferencia.cl", "investigacion_digital", True),
-    ("The Clinic", "theclinic.cl", "investigacion_digital", False),
-    ("El Dínamo", "eldinamo.cl", "investigacion_digital", False),
-    ("El Desconcierto", "eldesconcierto.cl", "investigacion_digital", False),
+    ("The Clinic", "theclinic.cl", "investigacion_digital", True),
+    ("El Dínamo", "eldinamo.cl", "investigacion_digital", True),
+    ("El Dínamo", "eldynamo.cl", "investigacion_digital", False),
+    ("El Siglo", "elsiglo.cl", "investigacion_digital", False),
+    ("El Desconcierto", "eldesconcierto.cl", "investigacion_digital", True),
     ("El Líbero", "ellibero.cl", "investigacion_digital", False),
     ("El Ciudadano", "elciudadano.com", "investigacion_digital", False),
     ("Diario UChile", "radio.uchile.cl", "investigacion_digital", False),
@@ -190,24 +184,25 @@ MEDIOS_CHILE = [
     # Radio y televisión
     ("BioBioChile", "biobiochile.cl", "television_radio", True),
     ("Cooperativa", "cooperativa.cl", "television_radio", True),
-    ("ADN Radio", "adnradio.cl", "television_radio", False),
+    ("ADN Radio", "adnradio.cl", "television_radio", True),
     ("Radio Agricultura", "radioagricultura.cl", "television_radio", False),
     ("Radio Duna", "duna.cl", "television_radio", False),
-    ("Radio Pauta", "pauta.cl", "television_radio", False),
+    ("Radio Pauta", "pauta.cl", "television_radio", True),
     ("CNN Chile", "cnnchile.com", "television_radio", True),
     ("24 Horas", "24horas.cl", "television_radio", True),
-    ("TVN", "tvn.cl", "television_radio", False),
+    ("TVN", "tvn.cl", "television_radio", True),
     ("T13", "t13.cl", "television_radio", True),
-    ("Canal 13", "canal13.cl", "television_radio", False),
+    ("Canal 13", "canal13.cl", "television_radio", True),
     ("Meganoticias", "meganoticias.cl", "television_radio", True),
     ("Mega", "mega.cl", "television_radio", False),
-    ("CHV Noticias", "chvnoticias.cl", "television_radio", False),
+    ("CHV Noticias", "chilevision.cl", "television_radio", True),
+    ("CHV Noticias", "chvnoticias.cl", "television_radio", True),
     # Jurídico y especializado
     ("Diario Constitucional", "diarioconstitucional.cl", "juridico", False),
     ("Estado Diario", "estadodiario.com", "juridico", False),
     ("El Mercurio Legal", "legal.elmercurio.com", "juridico", False),
     # Regionales
-    ("SoyChile", "soychile.cl", "regional", False),
+    ("SoyChile", "soychile.cl", "regional", True),
     ("Diario Concepción", "diarioconcepcion.cl", "regional", False),
     ("El Rancagüino", "elrancaguino.cl", "regional", False),
     ("La Discusión", "ladiscusion.cl", "regional", False),
@@ -226,82 +221,34 @@ MEDIOS_CHILE = [
     # Institucionales (no cuentan como prensa en la portada)
     ("Unidad de Análisis Financiero", "uaf.cl", "institucional", True),
     ("Ministerio Público", "fiscaliadechile.cl", "institucional", True),
-    ("Ministerio Público", "ministeriopublico.cl", "institucional", False),
-    ("Poder Judicial", "pjud.cl", "institucional", False),
+    ("Ministerio Público", "ministeriopublico.cl", "institucional", True),
+    ("Poder Judicial", "pjud.cl", "institucional", True),
     ("Poder Judicial", "poderjudicial.cl", "institucional", False),
     ("CMF Chile", "cmfchile.cl", "institucional", True),
     ("PDI", "pdichile.cl", "institucional", False),
     ("PDI", "pdi.cl", "institucional", False),
     ("Carabineros", "carabineros.cl", "institucional", False),
     ("Consejo de Defensa del Estado", "cde.cl", "institucional", False),
-    ("Contraloría", "contraloria.cl", "institucional", False),
+    ("Contraloría", "contraloria.cl", "institucional", True),
     ("Banco Central", "bcentral.cl", "institucional", False),
-    ("SII", "sii.cl", "institucional", False),
+    ("SII", "sii.cl", "institucional", True),
     ("Aduanas", "aduana.cl", "institucional", False),
     ("Senado", "senado.cl", "institucional", False),
-    ("Cámara de Diputadas y Diputados", "camara.cl", "institucional", False),
+    ("Cámara de Diputadas y Diputados", "camara.cl", "institucional", True),
     ("Biblioteca del Congreso", "bcn.cl", "institucional", False),
     ("Ministerio de Hacienda", "hacienda.cl", "institucional", False),
-    ("Diario Oficial", "diariooficial.interior.gob.cl", "institucional", False),
- ]
-
-# Fuentes que el usuario exige como cobertura mínima. El dominio correcto de
-# El Dínamo es eldinamo.cl ("eldynamo.cl" no corresponde al medio).
-FUENTES_MINIMAS = {
-    "df.cl": "Diario Financiero",
-    "latercera.com": "La Tercera / Pulso",
-    "emol.com": "Emol",
-    "elmercurio.com": "El Mercurio",
-    "elmostrador.cl": "El Mostrador",
-    "biobiochile.cl": "BioBioChile / Radio Bío Bío",
-    "cooperativa.cl": "Cooperativa",
-    "adnradio.cl": "ADN Radio",
-    "pauta.cl": "Radio Pauta",
-    "24horas.cl": "24 Horas / TVN",
-    "t13.cl": "T13 / Canal 13",
-    "chvnoticias.cl": "CHV Noticias",
-    "meganoticias.cl": "Meganoticias",
-    "cnnchile.com": "CNN Chile",
-    "interferencia.cl": "Interferencia",
-    "ciperchile.cl": "CIPER Chile",
-    "ex-ante.cl": "Ex-Ante",
-    "eldesconcierto.cl": "El Desconcierto",
-    "eldinamo.cl": "El Dínamo",
-    "fiscaliadechile.cl": "Ministerio Público / Fiscalía de Chile",
-    "diariooficial.interior.gob.cl": "Diario Oficial",
-    "cmfchile.cl": "Comisión para el Mercado Financiero",
-    "sii.cl": "Servicio de Impuestos Internos",
-    "pjud.cl": "Poder Judicial",
-    "contraloria.cl": "Contraloría General de la República",
-    "camara.cl": "Cámara de Diputadas y Diputados",
-    "soychile.cl": "Red SoyChile / diarios regionales",
-}
-DOMINIOS_MINIMOS = tuple(FUENTES_MINIMAS)
-
-# Portadas o secciones que sirven como respaldo directo cuando no hay feed o
-# sitemap utilizable. Se extraen enlaces editoriales y luego se revisa el cuerpo.
-PORTADAS_FUENTES = {
-    host: [f"https://{host}/"] for host in DOMINIOS_MINIMOS
-}
-PORTADAS_FUENTES.update({
-    "df.cl": ["https://www.df.cl/"],
-    "latercera.com": ["https://www.latercera.com/", "https://www.latercera.com/pulso/"],
-    "emol.com": ["https://www.emol.com/"],
-    "elmercurio.com": ["https://www.elmercurio.com/"],
-    "biobiochile.cl": ["https://www.biobiochile.cl/"],
-    "cooperativa.cl": ["https://www.cooperativa.cl/noticias/"],
-    "24horas.cl": ["https://www.24horas.cl/"],
-    "t13.cl": ["https://www.t13.cl/"],
-    "fiscaliadechile.cl": ["https://www.fiscaliadechile.cl/Fiscalia/index.do"],
-    "pjud.cl": ["https://www.pjud.cl/prensa-y-comunicaciones/noticias-del-poder-judicial"],
-    "camara.cl": ["https://www.camara.cl/prensa/noticias.aspx"],
-})
+    ("Diario Oficial", "diariooficial.interior.gob.cl", "institucional", True),
+]
 
 DOMINIOS_CHILENOS = {host for _, host, _, _ in MEDIOS_CHILE}
 NOMBRE_POR_DOMINIO = {host: nombre for nombre, host, _, _ in MEDIOS_CHILE}
 TIPO_POR_DOMINIO = {host: tipo for _, host, tipo, _ in MEDIOS_CHILE}
 DOMINIOS_PRIORITARIOS = [host for _, host, tipo, prio in MEDIOS_CHILE
                          if prio and tipo != "institucional"]
+# Todo dominio marcado como prioritario recibe consultas «site:» en los
+# buscadores: es la vía garantizada de cobertura cuando un medio no publica
+# feed ni news-sitemap utilizable.
+DOMINIOS_BUSQUEDA_SITIO = [host for _, host, _, prio in MEDIOS_CHILE if prio]
 DOMINIOS_INSTITUCIONALES = {host for _, host, tipo, _ in MEDIOS_CHILE if tipo == "institucional"}
 
 # Nivel B: cualquier dominio bajo el ccTLD chileno o subdominio de gobierno.
@@ -368,18 +315,6 @@ SEMILLAS_ENDPOINTS = {
     "cooperativa.cl": {"feeds": ["https://www.cooperativa.cl/noticias/site/tax/port/all/rss_2_0.xml"],
                        "sitemaps": []},
     "uaf.cl": {"feeds": [], "sitemaps": []},
-    "adnradio.cl": {"feeds": ["https://www.adnradio.cl/rss/"], "sitemaps": ["https://www.adnradio.cl/news-sitemap.xml"]},
-    "pauta.cl": {"feeds": ["https://www.pauta.cl/feed"], "sitemaps": ["https://www.pauta.cl/news-sitemap.xml"]},
-    "24horas.cl": {"feeds": ["https://www.24horas.cl/rss"], "sitemaps": ["https://www.24horas.cl/news-sitemap.xml"]},
-    "t13.cl": {"feeds": ["https://www.t13.cl/rss"], "sitemaps": ["https://www.t13.cl/sitemap-news.xml"]},
-    "chvnoticias.cl": {"feeds": ["https://www.chvnoticias.cl/feed/"], "sitemaps": ["https://www.chvnoticias.cl/news-sitemap.xml"]},
-    "meganoticias.cl": {"feeds": ["https://www.meganoticias.cl/rss/"], "sitemaps": ["https://www.meganoticias.cl/news-sitemap.xml"]},
-    "cnnchile.com": {"feeds": ["https://www.cnnchile.com/feed/"], "sitemaps": ["https://www.cnnchile.com/news-sitemap.xml"]},
-    "eldesconcierto.cl": {"feeds": ["https://eldesconcierto.cl/feed"], "sitemaps": ["https://eldesconcierto.cl/news-sitemap.xml"]},
-    "eldinamo.cl": {"feeds": ["https://www.eldinamo.cl/feed/"], "sitemaps": ["https://www.eldinamo.cl/news-sitemap.xml"]},
-    "fiscaliadechile.cl": {"feeds": [], "sitemaps": ["https://www.fiscaliadechile.cl/Fiscalia/sitemap.xml"]},
-    "cmfchile.cl": {"feeds": [], "sitemaps": ["https://www.cmfchile.cl/portal/prensa/sitemap.xml"]},
-    "soychile.cl": {"feeds": ["https://www.soychile.cl/rss.aspx"], "sitemaps": ["https://www.soychile.cl/sitemap.xml"]},
 }
 
 CONSULTAS_UAF_NUCLEO = [
@@ -429,15 +364,10 @@ CONSULTAS_LAFT = [
 
 def construye_consultas_prensa():
     consultas = list(CONSULTAS_UAF_NUCLEO) + list(CONSULTAS_LAFT)
-    dominios = list(dict.fromkeys(list(DOMINIOS_PRIORITARIOS) + list(DOMINIOS_MINIMOS)))
-    for dominio in dominios:
-        consultas.append(f'site:{dominio} ("Unidad de Análisis Financiero" OR "UAF")')
-        consultas.append(f'site:{dominio} ("lavado de activos" OR "lavado de dinero" OR blanqueo)')
-    consultas.extend([
-        'site:uaf.cl "Unidad de Análisis Financiero"',
-        'site:fiscaliadechile.cl "lavado de activos"',
-        'site:cmfchile.cl "lavado de activos"',
-    ])
+    for dominio in DOMINIOS_BUSQUEDA_SITIO:
+        consultas.append(f'site:{dominio} ("Unidad de Análisis Financiero" OR UAF)')
+        consultas.append(f'site:{dominio} ("lavado de activos" OR "lavado de dinero" '
+                         f'OR "operaciones sospechosas" OR blanqueo)')
     return list(dict.fromkeys(consultas))
 
 
@@ -455,7 +385,8 @@ CONSULTAS_BING = CONSULTAS_UAF_NUCLEO + [
     '"lavado de activos" Chile UAF',
     '"operaciones sospechosas" UAF Chile',
     '"financiamiento del terrorismo" Chile',
-]
+] + [f'site:{d} ("Unidad de Análisis Financiero" OR "lavado de activos")'
+     for d in DOMINIOS_PRIORITARIOS[:18]]
 
 CONSULTAS_SOCIALES = [
     '"lavado de activos"',
@@ -789,23 +720,6 @@ def log(msg):
             pass
 
 
-_COBERTURA_EJECUCION = {}
-
-
-def registra_cobertura(host, canal, resultados=0, ok=True, error=""):
-    host = (host or "").lower().strip(".")
-    if not host:
-        return
-    item = _COBERTURA_EJECUCION.setdefault(host, {
-        "fuente": FUENTES_MINIMAS.get(host, NOMBRE_POR_DOMINIO.get(host, host)),
-        "dominio": host, "canales": {}, "resultados": 0, "errores": [],
-    })
-    item["canales"][canal] = item["canales"].get(canal, 0) + int(resultados or 0)
-    item["resultados"] += int(resultados or 0)
-    if not ok and error:
-        item["errores"].append(str(error)[:160])
-
-
 def normaliza(texto):
     """Minúsculas sin tildes y con espacios colapsados."""
     texto = str(texto or "").lower()
@@ -1016,17 +930,25 @@ class _Redirecciones(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_Redirecciones())
 _OPENER.addheaders = []
 
+# Endpoints diseñados para consulta frecuente: no requieren el intervalo de
+# cortesía que se aplica a los sitios de los medios.
+INTERVALO_ESPECIAL = {
+    "news.google.com": 0.35, "bing.com": 0.5, "api.gdeltproject.org": 0.5,
+    "public.api.bsky.app": 0.6, "reddit.com": 1.2,
+}
+
 _ultimo_por_host = {}
 _lock_host = threading.Lock()
 
 
 def _espera_turno(host):
-    if INTERVALO_POR_HOST <= 0:
+    intervalo = INTERVALO_ESPECIAL.get(host, INTERVALO_POR_HOST)
+    if intervalo <= 0:
         return
     while True:
         with _lock_host:
             ahora = time.monotonic()
-            listo = _ultimo_por_host.get(host, 0.0) + INTERVALO_POR_HOST
+            listo = _ultimo_por_host.get(host, 0.0) + intervalo
             if ahora >= listo:
                 _ultimo_por_host[host] = ahora
                 return
@@ -1078,7 +1000,7 @@ def _robots_permite(url):
 
 
 def descarga(url, accept="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-             max_bytes=None, robots=True, reintentos=2):
+             max_bytes=None, robots=True, reintentos=2, cuerpo=None, cabeceras=None):
     """Descarga defensiva. Devuelve (bytes, url_final, headers)."""
     if not _url_segura(url):
         raise ErrorRed(f"url no permitida: {url[:120]}")
@@ -1091,13 +1013,16 @@ def descarga(url, accept="text/html,application/xhtml+xml,application/xml;q=0.9,
         if tiempo_agotado(reserva=45):
             raise ErrorRed("presupuesto de tiempo agotado")
         _espera_turno(host)
-        req = urllib.request.Request(url, headers={
+        cab = {
             "User-Agent": UA,
             "Accept": accept,
             "Accept-Language": "es-CL,es;q=0.9",
             "Accept-Encoding": "gzip, deflate",
             "Cache-Control": "no-cache",
-        })
+        }
+        cab.update(cabeceras or {})
+        req = urllib.request.Request(url, headers=cab, data=cuerpo,
+                                     method="POST" if cuerpo else "GET")
         try:
             with _OPENER.open(req, timeout=TIMEOUT) as r:
                 bruto = r.read(tope + 1)
@@ -1110,38 +1035,6 @@ def descarga(url, accept="text/html,application/xhtml+xml,application/xml;q=0.9,
             ultimo_error = e
             codigo = getattr(e, "code", None)
             if codigo in (401, 403, 404, 410, 451):
-                break
-            time.sleep(0.7 * (intento + 1))
-    raise ErrorRed(f"{type(ultimo_error).__name__}: {ultimo_error}")
-
-
-def post_json(url, payload, headers_extra=None, max_bytes=3_000_000, reintentos=2):
-    """POST JSON defensivo para proveedores opcionales como Perplexity."""
-    if not _url_segura(url):
-        raise ErrorRed(f"url no permitida: {url[:120]}")
-    host = dominio_url(url)
-    ultimo_error = None
-    cuerpo = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    for intento in range(max(1, reintentos)):
-        if tiempo_agotado(reserva=45):
-            raise ErrorRed("presupuesto de tiempo agotado")
-        _espera_turno(host)
-        cabeceras = {
-            "User-Agent": UA,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Accept-Language": "es-CL,es;q=0.9",
-        }
-        cabeceras.update(headers_extra or {})
-        req = urllib.request.Request(url, data=cuerpo, headers=cabeceras, method="POST")
-        try:
-            with _OPENER.open(req, timeout=TIMEOUT) as r:
-                bruto = r.read(max_bytes + 1)
-                hs = dict(r.headers.items())
-            return json_seguro(bruto[:max_bytes], hs)
-        except Exception as e:
-            ultimo_error = e
-            if getattr(e, "code", None) in (400, 401, 403, 404, 422):
                 break
             time.sleep(0.7 * (intento + 1))
     raise ErrorRed(f"{type(ultimo_error).__name__}: {ultimo_error}")
@@ -1512,9 +1405,8 @@ def enriquece_articulo(reg):
             r["resumen"] = datos["descripcion"][:900]
         elif not r.get("resumen") and datos.get("cuerpo"):
             r["resumen"] = datos["cuerpo"][:900]
-        if datos.get("fecha_dt") and (not r.get("fecha_dt") or r.get("fecha_estimada")):
+        if datos.get("fecha_dt") and not r.get("fecha_dt"):
             r["fecha_dt"] = datos["fecha_dt"]
-            r.pop("fecha_estimada", None)
         if datos.get("enlaza_uaf"):
             r["enlaza_uaf"] = True
         r["fuente_institucional"] = es_fuente_institucional(r)
@@ -1891,6 +1783,17 @@ DOMINIO_LAFT = ENCUADRE_NUCLEO + [
 ]
 
 
+SENAL_PATRIMONIAL = [
+    "dinero", "millones", "cuentas", "cuenta bancaria", "transferencia",
+    "transferencias", "bienes", "patrimonio", "incaut", "decomis", "comiso",
+    "activos", "fondos", "efectivo", "criptomoneda", "criptoactivo",
+    "propiedades", "inmuebles", "vehiculos", "sociedades", "empresas",
+    "facturas", "boletas", "utilidades", "pagos", "remesas", "divisas",
+    "extincion de dominio", "utilidad ilicita", "ganancias",
+]
+PRECEDENTES_TODOS = [t for lista in PRECEDENTES.values() for t in lista]
+
+
 def es_pertinente(reg):
     """Descarta ruido y menciones a UAF extranjeras sin conexión chilena."""
     texto = texto_registro(reg)
@@ -1903,11 +1806,17 @@ def es_pertinente(reg):
         # Nota extranjera: solo se conserva si además desarrolla el dominio LA/FT chileno.
         if not contiene(texto, ["chile", "chilena", "chileno"]):
             return False
+    if reg.get("fuente_institucional") and contiene(texto, CONTEXTO_LAFT_MINIMO):
+        return True
     sectores, impactos = clasifica_sujetos_obligados(texto)
     sujeto_relevante = bool(sectores and impactos and contiene(texto, DOMINIO_LAFT + [
         "oficial de cumplimiento", "sujeto obligado", "entidad reportante",
     ]))
-    return contiene(texto, DOMINIO_LAFT) or sujeto_relevante
+    # Un delito precedente con dimensión patrimonial es materia de interés para
+    # el monitor aunque el texto no use la expresión «lavado de activos».
+    precedente_patrimonial = (contiene(texto, PRECEDENTES_TODOS)
+                              and contiene(texto, SENAL_PATRIMONIAL))
+    return (contiene(texto, DOMINIO_LAFT) or sujeto_relevante or precedente_patrimonial)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2034,10 +1943,8 @@ def descubre_endpoints(host, estado, limite_pruebas=8):
     cache = estado.setdefault("endpoints", {})
     guardado = cache.get(host)
     ahora = time.time()
-    if guardado:
-        ttl = TTL_ENDPOINTS_HORAS if (guardado.get("feeds") or guardado.get("sitemaps"))             else TTL_ENDPOINTS_FALLIDOS_HORAS
-        if (ahora - guardado.get("ts", 0)) < ttl * 3600:
-            return guardado
+    if guardado and (ahora - guardado.get("ts", 0)) < TTL_ENDPOINTS_HORAS * 3600:
+        return guardado
 
     candidatos_feed, candidatos_sitemap = [], []
     semilla = SEMILLAS_ENDPOINTS.get(host, {})
@@ -2094,8 +2001,6 @@ def descubre_endpoints(host, estado, limite_pruebas=8):
 
     registro = {"feeds": feeds, "sitemaps": sitemaps, "ts": ahora}
     cache[host] = registro
-    registra_cobertura(host, "descubrimiento", len(feeds) + len(sitemaps),
-                       ok=bool(feeds or sitemaps), error="sin feed/sitemap válido")
     if feeds or sitemaps:
         log(f"  · fuentes de {host}: {len(feeds)} feed(s), {len(sitemaps)} sitemap(s)")
     return registro
@@ -2161,266 +2066,58 @@ def lee_sitemap(url, medio, host, corte, presupuesto, profundidad=0):
 
 
 # ─────────────────────────────────────────────────────────────
-# Barrido directo de portadas y buscadores alternativos
-# ─────────────────────────────────────────────────────────────
-
-class _ParserEnlaces(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.enlaces = []
-        self._href = ""
-        self._texto = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag.lower() != "a":
-            return
-        a = {str(k).lower(): (v or "") for k, v in attrs}
-        self._href = a.get("href", "").strip()
-        self._texto = []
-
-    def handle_data(self, data):
-        if self._href and data.strip():
-            self._texto.append(data.strip())
-
-    def handle_endtag(self, tag):
-        if tag.lower() == "a" and self._href:
-            texto = limpia_html(" ".join(self._texto))
-            self.enlaces.append((self._href, texto))
-            self._href = ""
-            self._texto = []
-
-
-def _parece_articulo(url, titulo=""):
-    p = urllib.parse.urlsplit(url)
-    ruta = normaliza(urllib.parse.unquote(p.path))
-    t = normaliza(titulo)
-    if not ruta or ruta in {"/", ""}:
-        return False
-    negativos = ("/tag/", "/categoria/", "/category/", "/autor/", "/author/", "/buscar",
-                 "/search", "/contact", "/suscripcion", "/newsletter", "/login", "/videos")
-    if any(x in ruta for x in negativos):
-        return False
-    segmentos = [x for x in ruta.split("/") if x]
-    tiene_fecha = bool(re.search(r"/(?:20\d{2})/(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])(?:/|$)", p.path))
-    slug_largo = bool(segmentos and len(segmentos[-1]) >= 18 and "-" in segmentos[-1])
-    return tiene_fecha or slug_largo or len(t) >= 35
-
-
-def extrae_enlaces_portada(contenido, final, host, medio):
-    texto_html = _decodifica(contenido)
-    parser = _ParserEnlaces()
-    try:
-        parser.feed(texto_html)
-        parser.close()
-    except Exception:
-        pass
-    salida, vistos = [], set()
-    for href, titulo in parser.enlaces[:1800]:
-        url = limpia_url(urllib.parse.urljoin(final, html_mod.unescape(href)))
-        if not url or not _coincide_dominio(dominio_url(url), {host}):
-            continue
-        if url in vistos or not _parece_articulo(url, titulo):
-            continue
-        vistos.add(url)
-        salida.append({
-            "titulo": titulo[:500] or urllib.parse.unquote(url.rsplit("/", 1)[-1]).replace("-", " ")[:300],
-            "link": url, "medio": medio, "resumen": "", "fecha_dt": datetime.now(TZ_CL),
-            "fecha_estimada": True,
-            "origen": "Portada directa", "fuente_url": f"https://{host}",
-            "origen_busqueda": f"portada:{host}",
-        })
-        if len(salida) >= 140:
-            break
-    return salida
-
-
-def recolecta_portadas_directas(estado):
-    """Lee siempre las fuentes mínimas, sin depender de un agregador."""
-    salida = []
-    rot = int(estado.get("rotacion_portadas", 0))
-    hosts = list(DOMINIOS_MINIMOS)
-    # Las fuentes más sensibles a falsos negativos van siempre; el resto rota.
-    fijos = ["df.cl", "biobiochile.cl", "fiscaliadechile.cl", "cmfchile.cl"]
-    cupo = max(8, _env_int("MONITOR_PORTADAS_POR_CORRIDA", 14))
-    rotativos = [h for h in hosts if h not in fijos]
-    seleccion = fijos + [rotativos[(rot + i) % len(rotativos)]
-                         for i in range(min(cupo, len(rotativos)))] if rotativos else fijos
-    estado["rotacion_portadas"] = rot + cupo
-    for host in dict.fromkeys(seleccion):
-        medio = FUENTES_MINIMAS.get(host, NOMBRE_POR_DOMINIO.get(host, host))
-        total_host, ok = 0, False
-        for url in PORTADAS_FUENTES.get(host, [f"https://{host}/"])[:2]:
-            if tiempo_agotado(reserva=220):
-                break
-            try:
-                contenido, final, _ = descarga(url, max_bytes=2_500_000, reintentos=1)
-                hallazgos = extrae_enlaces_portada(contenido, final, host, medio)
-                salida.extend(hallazgos)
-                total_host += len(hallazgos)
-                ok = True
-            except Exception as e:
-                registra_cobertura(host, "portada", 0, False, type(e).__name__)
-        registra_cobertura(host, "portada", total_host, ok, "portada no accesible")
-    log(f"  · Portadas directas → {len(salida)} enlaces editoriales")
-    return salida
-
-
-def _url_real_ddg(href):
-    absoluta = urllib.parse.urljoin("https://html.duckduckgo.com", html_mod.unescape(href or ""))
-    p = urllib.parse.urlsplit(absoluta)
-    qs = urllib.parse.parse_qs(p.query)
-    if "uddg" in qs and qs["uddg"]:
-        return urllib.parse.unquote(qs["uddg"][0])
-    return absoluta
-
-
-def parsea_resultados_duckduckgo(contenido, consulta):
-    texto_html = _decodifica(contenido)
-    parser = _ParserEnlaces()
-    try:
-        parser.feed(texto_html)
-        parser.close()
-    except Exception:
-        return []
-    salida, vistos = [], set()
-    for href, titulo in parser.enlaces:
-        if not titulo or "result" not in (href or "") and "uddg=" not in (href or ""):
-            continue
-        real = limpia_url(_url_real_ddg(href))
-        host = dominio_url(real)
-        if not real or not nivel_dominio_chileno(host) or real in vistos:
-            continue
-        vistos.add(real)
-        salida.append({
-            "titulo": titulo[:500], "link": real,
-            "medio": NOMBRE_POR_DOMINIO.get(host, FUENTES_MINIMAS.get(host, host)),
-            "resumen": "", "fecha_dt": None, "origen": "DuckDuckGo",
-            "fuente_url": f"https://{host}", "origen_busqueda": f"duckduckgo:{consulta}"[:180],
-        })
-        if len(salida) >= 30:
-            break
-    return salida
-
-
-def recolecta_duckduckgo(estado):
-    if not DUCKDUCKGO_ACTIVO:
-        return []
-    salida = []
-    rot = int(estado.get("rotacion_site", 0))
-    hosts = list(DOMINIOS_MINIMOS)
-    seleccion = [hosts[(rot + i) % len(hosts)] for i in range(min(DOMINIOS_SITE_POR_CORRIDA, len(hosts)))]
-    consultas = [
-        '"Unidad de Análisis Financiero" Chile',
-        '("lavado de activos" OR "lavado de dinero") Chile',
-    ] + [f'site:{h} ("Unidad de Análisis Financiero" OR UAF OR "lavado de activos")' for h in seleccion]
-    estado["rotacion_site"] = rot + DOMINIOS_SITE_POR_CORRIDA
-    for q in consultas:
-        if tiempo_agotado(reserva=220):
-            break
-        url = "https://html.duckduckgo.com/html/?kl=cl-es&q=" + urllib.parse.quote(q)
-        try:
-            contenido, _, _ = descarga(url, max_bytes=2_000_000, robots=False, reintentos=1)
-            hallazgos = parsea_resultados_duckduckgo(contenido, q)
-            salida.extend(hallazgos)
-            for r in hallazgos:
-                registra_cobertura(dominio_url(r.get("link")), "duckduckgo", 1)
-        except Exception as e:
-            log(f"  ! DuckDuckGo «{q[:45]}»: {type(e).__name__}")
-    log(f"  · DuckDuckGo → {len(salida)} resultados chilenos")
-    return salida
-
-
-def recolecta_perplexity():
-    """Proveedor opcional. Requiere PERPLEXITY_API_KEY en GitHub Secrets."""
-    if not PERPLEXITY_ACTIVO:
-        return []
-    dominios = list(DOMINIOS_MINIMOS)
-    salida = []
-    for grupo in (dominios[:20], dominios[20:]):
-        if not grupo or tiempo_agotado(reserva=220):
-            continue
-        payload = {
-            "query": [
-                "Chile Unidad de Análisis Financiero UAF noticias último mes",
-                "Chile lavado de activos operaciones sospechosas noticias último mes",
-            ],
-            "search_domain_filter": grupo,
-            "search_language_filter": ["es"],
-            "country": "CL",
-            "max_results": 20,
-            "search_context_size": "low",
-        }
-        try:
-            datos = post_json("https://api.perplexity.ai/search", payload, {
-                "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
-            })
-        except Exception as e:
-            log(f"  ! Perplexity Search: {type(e).__name__}")
-            continue
-        # En multi-query algunas versiones devuelven results planos y otras grupos.
-        resultados = datos.get("results") or []
-        planos = []
-        for x in resultados:
-            if isinstance(x, dict) and isinstance(x.get("results"), list):
-                planos.extend(x["results"])
-            elif isinstance(x, dict):
-                planos.append(x)
-        for art in planos:
-            enlace = limpia_url(art.get("url", ""))
-            host = dominio_url(enlace)
-            if not enlace or not nivel_dominio_chileno(host):
-                continue
-            salida.append({
-                "titulo": limpia_html(art.get("title", ""))[:500], "link": enlace,
-                "medio": NOMBRE_POR_DOMINIO.get(host, FUENTES_MINIMAS.get(host, host)),
-                "resumen": limpia_html(art.get("snippet", ""))[:900],
-                "fecha_dt": parsea_fecha_flexible(art.get("date") or art.get("last_updated")),
-                "origen": "Perplexity Search API", "fuente_url": f"https://{host}",
-                "origen_busqueda": "perplexity:UAF-LAFT-Chile",
-            })
-            registra_cobertura(host, "perplexity", 1)
-    log(f"  · Perplexity → {len(salida)} resultados chilenos")
-    return salida
-
-
-# ─────────────────────────────────────────────────────────────
 # Canales de descubrimiento
 # ─────────────────────────────────────────────────────────────
 
-def recolecta_google_news():
+def en_paralelo(tareas, etiqueta="canal", hilos=None):
+    """Ejecuta tareas sin argumentos que devuelven listas y concatena resultados."""
     salida = []
-    for q in CONSULTAS_PRENSA:
-        if tiempo_agotado(reserva=300):
-            log("  ! Google News interrumpido por presupuesto de tiempo")
-            break
-        consulta = f"{q} when:{min(VENTANA_DIAS, 30)}d"
-        url = ("https://news.google.com/rss/search?q=" + urllib.parse.quote(consulta)
-               + "&hl=es-419&gl=CL&ceid=CL:es-419")
-        hallazgos = lee_feed(url, "Google News")
-        for r in hallazgos:
-            r["origen_busqueda"] = f"google:{q}"[:180]
-        salida.extend(hallazgos)
-        for r in hallazgos:
-            registra_cobertura(dominio_url(r.get("link")) or dominio_url(r.get("fuente_url")),
-                               "google_news", 1)
-    log(f"  · Google News → {len(salida)} resultados brutos")
+    if not tareas:
+        return salida
+    with ThreadPoolExecutor(max_workers=hilos or HILOS) as pool:
+        futuros = [pool.submit(t) for t in tareas]
+        for fut in as_completed(futuros):
+            try:
+                salida.extend(fut.result() or [])
+            except Exception as e:  # noqa: BLE001
+                log(f"  ! {etiqueta}: {type(e).__name__}")
+    return salida
+
+
+def recolecta_google_news():
+    def tarea(q):
+        def _ejecuta():
+            if tiempo_agotado(reserva=260):
+                return []
+            consulta = f"{q} when:{min(VENTANA_DIAS, 30)}d"
+            url = ("https://news.google.com/rss/search?q=" + urllib.parse.quote(consulta)
+                   + "&hl=es-419&gl=CL&ceid=CL:es-419")
+            hallazgos = lee_feed(url, "Google News")
+            for r in hallazgos:
+                r["origen_busqueda"] = f"google:{q}"[:180]
+            return hallazgos
+        return _ejecuta
+
+    salida = en_paralelo([tarea(q) for q in CONSULTAS_PRENSA], "Google News")
+    log(f"  · Google News → {len(salida)} resultados brutos "
+        f"({len(CONSULTAS_PRENSA)} consultas, {len(DOMINIOS_BUSQUEDA_SITIO)} dirigidas por medio)")
     return salida
 
 
 def recolecta_bing_news():
-    salida = []
-    for q in CONSULTAS_BING:
-        if tiempo_agotado(reserva=280):
-            break
-        url = ("https://www.bing.com/news/search?q=" + urllib.parse.quote(q)
-               + "&format=RSS&setmkt=es-CL&setlang=es")
-        hallazgos = lee_feed(url, "Bing News")
-        for r in hallazgos:
-            r["origen_busqueda"] = f"bing:{q}"[:180]
-        salida.extend(hallazgos)
-        for r in hallazgos:
-            registra_cobertura(dominio_url(r.get("link")) or dominio_url(r.get("fuente_url")),
-                               "bing_news", 1)
+    def tarea(q):
+        def _ejecuta():
+            if tiempo_agotado(reserva=240):
+                return []
+            url = ("https://www.bing.com/news/search?q=" + urllib.parse.quote(q)
+                   + "&format=RSS&setmkt=es-CL&setlang=es")
+            hallazgos = lee_feed(url, "Bing News")
+            for r in hallazgos:
+                r["origen_busqueda"] = f"bing:{q}"[:180]
+            return hallazgos
+        return _ejecuta
+
+    salida = en_paralelo([tarea(q) for q in CONSULTAS_BING], "Bing News")
     log(f"  · Bing News → {len(salida)} resultados brutos")
     return salida
 
@@ -2460,8 +2157,73 @@ def recolecta_gdelt():
                 "fuente_url": f"https://{host}",
                 "origen_busqueda": f"gdelt:{q}"[:180],
             })
-            registra_cobertura(host, "gdelt", 1)
     log(f"  · GDELT → {len(salida)} artículos chilenos")
+    return salida
+
+
+CLAVE_PERPLEXITY = os.getenv("PERPLEXITY_API_KEY", "").strip()
+MODELO_PERPLEXITY = os.getenv("PERPLEXITY_MODELO", "sonar").strip() or "sonar"
+CONSULTAS_PERPLEXITY = [
+    "Noticias publicadas en los últimos 7 días por medios de prensa chilenos que "
+    "mencionen a la Unidad de Análisis Financiero (UAF) de Chile. Entrega solo "
+    "los enlaces de las notas.",
+    "Noticias de los últimos 7 días en medios chilenos sobre lavado de activos, "
+    "financiamiento del terrorismo u operaciones sospechosas en Chile. Entrega "
+    "solo los enlaces de las notas.",
+]
+
+
+def recolecta_perplexity():
+    """Búsqueda sintética opcional. Requiere PERPLEXITY_API_KEY (servicio de pago).
+
+    Del resultado se usan **solo las URL citadas**: el titular, la fecha y la
+    mención a la UAF se verifican después descargando el artículo con el mismo
+    extractor que el resto del monitor. Nada de lo que afirme el modelo entra al
+    dashboard sin comprobarse contra la fuente.
+    """
+    if not CLAVE_PERPLEXITY:
+        return []
+    salida = []
+    for consulta in CONSULTAS_PERPLEXITY:
+        if tiempo_agotado(reserva=200):
+            break
+        payload = json.dumps({
+            "model": MODELO_PERPLEXITY,
+            "messages": [{"role": "user", "content": consulta}],
+            "search_domain_filter": DOMINIOS_PRIORITARIOS[:10],
+            "search_recency_filter": "week",
+            "max_tokens": 400,
+        }).encode("utf-8")
+        try:
+            contenido, _, headers = descarga(
+                "https://api.perplexity.ai/chat/completions", accept="application/json",
+                max_bytes=2_000_000, robots=False, reintentos=1, cuerpo=payload,
+                cabeceras={"Authorization": f"Bearer {CLAVE_PERPLEXITY}",
+                           "Content-Type": "application/json"})
+            datos = json_seguro(contenido, headers)
+        except Exception as e:  # noqa: BLE001
+            log(f"  ! Perplexity: {type(e).__name__}")
+            continue
+        citas = datos.get("citations") or datos.get("search_results") or []
+        for cita in citas:
+            url = cita.get("url") if isinstance(cita, dict) else cita
+            if not url_http(str(url or "")):
+                continue
+            host = dominio_url(url)
+            if not nivel_dominio_chileno(host):
+                continue
+            salida.append({
+                "titulo": (cita.get("title") if isinstance(cita, dict) else "") or "Por verificar",
+                "link": str(url),
+                "medio": NOMBRE_POR_DOMINIO.get(host, host),
+                "resumen": "",
+                "fecha_dt": None,
+                "origen": "Perplexity",
+                "fuente_url": f"https://{host}",
+                "origen_busqueda": "perplexity",
+            })
+    if salida:
+        log(f"  · Perplexity → {len(salida)} enlaces chilenos por verificar")
     return salida
 
 
@@ -2470,67 +2232,67 @@ def recolecta_feeds_medios(estado):
     salida = []
     hosts = [h for _, h, tipo, _ in MEDIOS_CHILE if tipo != "institucional"]
     hosts += sorted(DOMINIOS_INSTITUCIONALES)
-    pendientes = []
-    for h in hosts:
-        guardado = estado.get("endpoints", {}).get(h, {})
-        ttl = TTL_ENDPOINTS_HORAS if (guardado.get("feeds") or guardado.get("sitemaps"))             else TTL_ENDPOINTS_FALLIDOS_HORAS
-        if (time.time() - guardado.get("ts", 0)) >= ttl * 3600:
-            pendientes.append(h)
-    # Fuentes mínimas sin endpoint se atienden antes que el resto.
-    pendientes.sort(key=lambda h: (h not in DOMINIOS_MINIMOS, h))
+    pendientes = [h for h in hosts
+                  if (time.time() - estado.get("endpoints", {}).get(h, {}).get("ts", 0))
+                  >= TTL_ENDPOINTS_HORAS * 3600]
+    # Descubrimiento progresivo: unos pocos dominios nuevos por corrida.
     rotacion = int(estado.get("rotacion_descubrimiento", 0))
-    cupo = DESCUBRE_POR_CORRIDA
+    cupo = _env_int("MONITOR_DESCUBRE_POR_CORRIDA", 14)
     if pendientes:
-        seleccion = pendientes[:cupo] if any(h in DOMINIOS_MINIMOS for h in pendientes) else             [pendientes[(rotacion + i) % len(pendientes)] for i in range(min(cupo, len(pendientes)))]
-        for host in dict.fromkeys(seleccion):
+        seleccion = list(dict.fromkeys(
+            pendientes[(rotacion + i) % len(pendientes)] for i in range(min(cupo, len(pendientes)))))
+        resultados = {}
+        lock = threading.Lock()
+
+        def descubre(host):
             if tiempo_agotado(reserva=200):
-                break
-            descubre_endpoints(host, estado)
+                return []
+            local = dict(estado)
+            local["endpoints"] = {}
+            info = descubre_endpoints(host, local)
+            with lock:
+                resultados[host] = info
+            return []
+
+        en_paralelo([lambda h=h: descubre(h) for h in seleccion], "descubrimiento")
+        estado.setdefault("endpoints", {}).update(resultados)
         estado["rotacion_descubrimiento"] = rotacion + cupo
 
+    tareas = []
     for host in hosts:
-        if tiempo_agotado(reserva=200):
-            break
         info = estado.get("endpoints", {}).get(host) or {}
-        feeds = list(dict.fromkeys((info.get("feeds") or []) +
-                                   SEMILLAS_ENDPOINTS.get(host, {}).get("feeds", [])))
-        total_host = 0
-        for feed in feeds[:2]:
-            medio = NOMBRE_POR_DOMINIO.get(host, FUENTES_MINIMAS.get(host, host))
-            hallazgos = lee_feed(feed, f"Feed {medio}", medio, f"https://{host}")
-            for r in hallazgos:
-                r["origen_busqueda"] = f"feed:{host}"
-            salida.extend(hallazgos)
-            total_host += len(hallazgos)
-        if feeds:
-            registra_cobertura(host, "feed", total_host, ok=total_host > 0,
-                               error="feed sin entradas")
-    log(f"  · Feeds propios de medios → {len(salida)} entradas")
+        for feed in (info.get("feeds") or [])[:2]:
+            def tarea(feed=feed, host=host):
+                if tiempo_agotado(reserva=170):
+                    return []
+                medio = NOMBRE_POR_DOMINIO.get(host, host)
+                hallazgos = lee_feed(feed, f"Feed {medio}", medio, f"https://{host}")
+                for r in hallazgos:
+                    r["origen_busqueda"] = f"feed:{host}"
+                return hallazgos
+            tareas.append(tarea)
+    salida = en_paralelo(tareas, "feeds de medios")
+    con_feed = sum(1 for h in hosts if (estado.get("endpoints", {}).get(h) or {}).get("feeds"))
+    log(f"  · Feeds propios de medios → {len(salida)} entradas "
+        f"({con_feed}/{len(hosts)} dominios con feed detectado)")
     return salida
 
 
 def recolecta_sitemaps(estado):
     corte = datetime.now(TZ_CL) - timedelta(days=3)
-    salida = []
-    hosts = list(dict.fromkeys(list(DOMINIOS_MINIMOS) + list(DOMINIOS_PRIORITARIOS)))
-    for host in hosts:
-        if tiempo_agotado(reserva=200):
-            break
+    tareas = []
+    for host in DOMINIOS_BUSQUEDA_SITIO:
         info = estado.get("endpoints", {}).get(host) or {}
-        sitemaps = list(dict.fromkeys((info.get("sitemaps") or []) +
-                                      SEMILLAS_ENDPOINTS.get(host, {}).get("sitemaps", [])))
-        total_host = 0
-        # Se prefiere un news-sitemap; los índices generales pueden ser enormes.
-        sitemaps.sort(key=lambda u: (not bool(re.search(r"news|noticia", u, re.I)), u))
+        sitemaps = info.get("sitemaps") or SEMILLAS_ENDPOINTS.get(host, {}).get("sitemaps", [])
         for url in sitemaps[:1]:
-            medio = NOMBRE_POR_DOMINIO.get(host, FUENTES_MINIMAS.get(host, host))
-            encontrados = lee_sitemap(url, medio, host, corte, [5])
-            salida.extend(encontrados)
-            total_host += len(encontrados)
-        if sitemaps:
-            registra_cobertura(host, "sitemap", total_host, ok=total_host > 0,
-                               error="sitemap sin noticias recientes")
-    log(f"  · News-sitemaps → {len(salida)} artículos recientes")
+            def tarea(url=url, host=host):
+                if tiempo_agotado(reserva=170):
+                    return []
+                medio = NOMBRE_POR_DOMINIO.get(host, host)
+                return lee_sitemap(url, medio, host, corte, [8])
+            tareas.append(tarea)
+    salida = en_paralelo(tareas, "news-sitemaps")
+    log(f"  · News-sitemaps → {len(salida)} artículos recientes ({len(tareas)} sitemaps leídos)")
     return salida
 
 
@@ -2699,53 +2461,28 @@ def _mezcla_candidatos(destino, reg):
     if previo.get("origen") != reg.get("origen"):
         previo["origenes"] = sorted(set(previo.get("origenes", [previo.get("origen", "")]))
                                     | {reg.get("origen", "")})
-    origenes_busqueda = set(filter(None, previo.get("origenes_busqueda", [previo.get("origen_busqueda", "")])))
-    origenes_busqueda.add(reg.get("origen_busqueda", ""))
-    previo["origenes_busqueda"] = sorted(filter(None, origenes_busqueda))[:12]
 
 
-def selecciona_barrido_equilibrado(candidatos, limite):
-    """Reserva cupos por dominio para que un medio voluminoso no tape al resto."""
-    if limite <= 0:
-        return []
-    grupos = {}
-    for reg in candidatos:
-        host = dominio_url(reg.get("link", "")) or dominio_url(reg.get("fuente_url", ""))
-        grupos.setdefault(host or "sin-dominio", []).append(reg)
-    orden = lambda r: (r.get("_puntaje", 0),
-                       r.get("fecha_dt") or datetime.min.replace(tzinfo=TZ_CL))
-    for lote in grupos.values():
-        lote.sort(key=orden, reverse=True)
+INFORME_COBERTURA = {}
 
-    elegidos, usados = [], set()
-    # Primero, representación mínima de cada fuente obligatoria que tenga candidatos.
-    for host in DOMINIOS_MINIMOS:
-        for reg in grupos.get(host, [])[:max(0, BARRIDO_MIN_POR_FUENTE)]:
-            clave = id_estable(reg.get("link", ""), reg.get("titulo", ""))
-            if clave not in usados and len(elegidos) < limite:
-                elegidos.append(reg); usados.add(clave)
-    # Después, el resto por puntaje/recencia global.
-    resto = sorted((r for lote in grupos.values() for r in lote), key=orden, reverse=True)
-    for reg in resto:
-        if len(elegidos) >= limite:
-            break
-        clave = id_estable(reg.get("link", ""), reg.get("titulo", ""))
-        if clave in usados:
-            continue
-        elegidos.append(reg); usados.add(clave)
-    return elegidos
+
+def _registra_cobertura(host, canal, n=1):
+    if not host:
+        return
+    fila = INFORME_COBERTURA.setdefault(host, {"candidatos": 0, "canales": {}})
+    fila["candidatos"] += n
+    fila["canales"][canal] = fila["canales"].get(canal, 0) + n
 
 
 def recolecta_prensa(estado, cuerpos_previos):
+    INFORME_COBERTURA.clear()
     crudos = []
     crudos += recolecta_google_news()
     crudos += recolecta_bing_news()
-    crudos += recolecta_duckduckgo(estado)
-    crudos += recolecta_perplexity()
     crudos += recolecta_gdelt()
+    crudos += recolecta_perplexity()
     crudos += recolecta_feeds_medios(estado)
     crudos += recolecta_sitemaps(estado)
-    crudos += recolecta_portadas_directas(estado)
     crudos += recolecta_uaf_oficial()
 
     candidatos = {}
@@ -2767,6 +2504,8 @@ def recolecta_prensa(estado, cuerpos_previos):
                 r["medio"] = NOMBRE_POR_DOMINIO[host]
         if es_fuente_institucional(r):
             r["fuente_institucional"] = True
+        _registra_cobertura(host or dominio_url(r["link"]),
+                            str(r.get("origen_busqueda", "") or r.get("origen", "")).split(":")[0])
         _mezcla_candidatos(candidatos, r)
 
     procesados = estado.setdefault("procesados", {})
@@ -2782,8 +2521,9 @@ def recolecta_prensa(estado, cuerpos_previos):
 
     orden = lambda r: (r["_puntaje"], r.get("fecha_dt") or datetime.min.replace(tzinfo=TZ_CL))
     objetivo.sort(key=orden, reverse=True)
+    barrido.sort(key=orden, reverse=True)
     objetivo = objetivo[:MAX_ARTICULOS_ENRIQUECER]
-    barrido = selecciona_barrido_equilibrado(barrido, PRESUPUESTO_BARRIDO)
+    barrido = barrido[:PRESUPUESTO_BARRIDO]
     log(f"  · candidatos chilenos únicos: {len(candidatos)} · objetivo: {len(objetivo)} · "
         f"barrido profundo: {len(barrido)} · descartados: {descartados}")
 
@@ -3399,7 +3139,16 @@ def pasada():
     def procesa(lote, canal):
         salida, dedup = [], set()
         for r in lote:
-            if not r.get("fecha_dt") or r["fecha_dt"] < corte:
+            if not r.get("fecha_dt"):
+                # Antes se descartaba la noticia. Ahora, si la fuente es chilena y
+                # pertinente, se conserva con fecha estimada al momento del hallazgo
+                # y queda marcada como tal para que el analista lo sepa.
+                if canal == "prensa" and r.get("cuerpo_extraido"):
+                    r["fecha_dt"] = ahora
+                    r["fecha_estimada"] = True
+                else:
+                    continue
+            if r["fecha_dt"] < corte:
                 continue
             if r["fecha_dt"] > ahora + timedelta(hours=6):
                 continue  # fechas futuras: dato erróneo del medio
@@ -3427,7 +3176,6 @@ def pasada():
                 "nivel_fuente": r.get("nivel_fuente", ""),
                 "origen": r.get("origen", ""),
                 "origen_busqueda": str(r.get("origen_busqueda", ""))[:180],
-                "origenes_busqueda": list(r.get("origenes_busqueda", []))[:12],
                 "enriquecido": bool(r.get("enriquecido")),
                 "cuerpo_extraido": bool(r.get("cuerpo_extraido")),
                 "texto_enriquecido": str(r.get("texto_enriquecido", ""))[:MAX_TEXTO_GUARDADO],
@@ -3453,6 +3201,7 @@ def pasada():
                 "plataforma": r.get("plataforma"),
                 "interacciones": int(r.get("interacciones", 0) or 0),
                 "nucleo": bool(r.get("nucleo")),
+                "fecha_estimada": bool(r.get("fecha_estimada")),
             }
             etiqueta_registro(registro)
             if clave not in vistos:
@@ -3477,35 +3226,59 @@ def pasada():
         "nuevos": len(nuevos),
         "consultas": (len(CONSULTAS_PRENSA) + len(CONSULTAS_BING) + len(CONSULTAS_GDELT)
                       + len(MEDIOS_CHILE) + len(CONSULTAS_SOCIALES) * (len(SUBREDDITS) + 1)),
-        "cobertura_fuentes": [
-            {
-                **_COBERTURA_EJECUCION.get(host, {
-                    "fuente": FUENTES_MINIMAS[host], "dominio": host,
-                    "canales": {}, "resultados": 0, "errores": ["no consultada en esta rotación"],
-                }),
-                "obligatoria": True,
-                "consultada": host in _COBERTURA_EJECUCION,
-            }
-            for host in DOMINIOS_MINIMOS
-        ],
         "cobertura_tecnica": {
             "cuerpos_extraidos": sum(1 for r in prensa if r.get("cuerpo_extraido")),
             "fuentes_institucionales": sum(1 for r in prensa if r.get("fuente_institucional")),
             "solo_fuentes_chilenas": True,
             "medios_en_lista_blanca": len(DOMINIOS_CHILENOS),
-            "fuentes_minimas_configuradas": len(DOMINIOS_MINIMOS),
-            "fuentes_minimas_consultadas": sum(1 for h in DOMINIOS_MINIMOS if h in _COBERTURA_EJECUCION),
-            "duckduckgo_activo": DUCKDUCKGO_ACTIVO,
-            "perplexity_activo": PERPLEXITY_ACTIVO,
             "dominios_con_feed": sum(1 for v in (estado.get("endpoints") or {}).values()
                                      if v.get("feeds")),
             "dominios_con_sitemap": sum(1 for v in (estado.get("endpoints") or {}).values()
                                         if v.get("sitemaps")),
             "articulos_en_memoria": len(estado.get("procesados") or {}),
+            "dominios_con_hallazgos": len(INFORME_COBERTURA),
             "respeta_robots": RESPETA_ROBOTS,
             "segundos_corrida": round(time.monotonic() - _INICIO, 1),
         },
     }
+
+    # Auditoría de cobertura: cuántas noticias aportó cada dominio y cuáles
+    # de los medios de la lista no entregaron nada en esta corrida.
+    publicadas = {}
+    for r in prensa:
+        host = dominio_url(r.get("link", "")) or dominio_url(r.get("fuente_url", ""))
+        fila = publicadas.setdefault(host, {"total": 0, "uaf": 0})
+        fila["total"] += 1
+        if r.get("uaf"):
+            fila["uaf"] += 1
+    cobertura_medios = []
+    for host in dict.fromkeys(DOMINIOS_BUSQUEDA_SITIO + sorted(publicadas)):
+        endpoints = (estado.get("endpoints", {}) or {}).get(host, {})
+        pub = publicadas.get(host, {})
+        cand = INFORME_COBERTURA.get(host, {})
+        cobertura_medios.append({
+            "medio": NOMBRE_POR_DOMINIO.get(host, host),
+            "dominio": host,
+            "prioritario": host in DOMINIOS_BUSQUEDA_SITIO,
+            "candidatos": cand.get("candidatos", 0),
+            "canales": sorted((cand.get("canales") or {}).keys()),
+            "publicadas_30d": pub.get("total", 0),
+            "uaf_30d": pub.get("uaf", 0),
+            "feed": bool(endpoints.get("feeds")),
+            "sitemap": bool(endpoints.get("sitemaps")),
+        })
+    cobertura_medios.sort(key=lambda x: (-x["publicadas_30d"], -x["candidatos"], x["dominio"]))
+    salida["cobertura_medios"] = cobertura_medios
+
+    silenciosos = [c["dominio"] for c in cobertura_medios
+                   if c["prioritario"] and not c["candidatos"] and not c["publicadas_30d"]]
+    if silenciosos:
+        log(f"  ! sin hallazgos en esta corrida ({len(silenciosos)}): {', '.join(silenciosos[:22])}")
+    sin_via = [c["dominio"] for c in cobertura_medios
+               if c["prioritario"] and not c["feed"] and not c["sitemap"]]
+    if sin_via:
+        log(f"  · sin feed ni sitemap propio, dependen de buscadores ({len(sin_via)}): "
+            f"{', '.join(sin_via[:22])}")
 
     temporal = SALIDA + ".tmp"
     with open(temporal, "w", encoding="utf-8") as fh:
@@ -3526,47 +3299,30 @@ def pasada():
 
 def diagnostico():
     estado = carga_estado()
-    log("Diagnóstico de fuentes (puede tardar).")
-    for _, host, tipo, prio in MEDIOS_CHILE:
-        if tiempo_agotado(reserva=60):
-            log("! presupuesto agotado")
-            break
-        info = descubre_endpoints(host, estado)
-        log(f"  {host:34s} feeds={len(info.get('feeds', []))} "
-            f"sitemaps={len(info.get('sitemaps', []))} tipo={tipo}")
+    log(f"Diagnóstico de {len(MEDIOS_CHILE)} dominios (puede tardar varios minutos).")
+    filas = []
+    lock = threading.Lock()
+
+    def revisa(host, tipo, prio):
+        local = {"endpoints": {}}
+        info = descubre_endpoints(host, local)
+        with lock:
+            estado.setdefault("endpoints", {})[host] = info
+            filas.append((host, tipo, prio, len(info.get("feeds", [])),
+                          len(info.get("sitemaps", []))))
+        return []
+
+    en_paralelo([lambda h=h, t=t, p=pr: revisa(h, t, p)
+                 for _, h, t, pr in MEDIOS_CHILE], "diagnóstico")
+    filas.sort(key=lambda f: (f[3] + f[4], f[0]))
+    log("  dominio                              feeds sitemaps  vía")
+    for host, tipo, prio, nf, ns in filas:
+        via = "feed/sitemap" if (nf or ns) else ("buscadores" if prio else "sin vía propia")
+        log(f"  {host:36s} {nf:5d} {ns:8d}  {via} ({tipo})")
+    sin_via = [f[0] for f in filas if not f[3] and not f[4]]
+    log(f"Resumen: {len(filas) - len(sin_via)}/{len(filas)} dominios con feed o sitemap propio.")
+    log(f"Los {len(sin_via)} restantes se cubren con consultas site: en Google News y Bing.")
     guarda_estado(estado)
-
-
-def validar_fuentes_config():
-    faltantes = [h for h in DOMINIOS_MINIMOS if h not in DOMINIOS_CHILENOS]
-    duplicados = sorted({h for h in DOMINIOS_MINIMOS if list(DOMINIOS_MINIMOS).count(h) > 1})
-    print(json.dumps({
-        "version": VERSION_MONITOR,
-        "fuentes_minimas": len(DOMINIOS_MINIMOS),
-        "faltantes_en_catalogo": faltantes,
-        "duplicados": duplicados,
-        "dominio_el_dinamo": "eldinamo.cl",
-        "perplexity_configurado": bool(PERPLEXITY_API_KEY),
-    }, ensure_ascii=False, indent=2))
-    return 1 if faltantes or duplicados else 0
-
-
-def probar_url(url):
-    host = dominio_url(url)
-    reg = {"titulo": "", "resumen": "", "link": url,
-           "medio": NOMBRE_POR_DOMINIO.get(host, FUENTES_MINIMAS.get(host, host)),
-           "fuente_url": f"https://{host}"}
-    resultado = enriquece_articulo(reg)
-    uaf, confianza, motivos, puntaje, menciones = analiza_uaf(resultado)
-    print(json.dumps({
-        "url": url, "url_final": resultado.get("link"),
-        "titulo": resultado.get("titulo"), "cuerpo_extraido": resultado.get("cuerpo_extraido"),
-        "fecha": resultado.get("fecha_dt").isoformat() if resultado.get("fecha_dt") else None,
-        "uaf_chile": uaf, "confianza": confianza, "puntaje": puntaje,
-        "menciones": menciones, "motivos": motivos,
-        "contexto": extrae_contexto_uaf(resultado)[:500],
-        "error": resultado.get("error_enriquecimiento"),
-    }, ensure_ascii=False, indent=2))
 
 
 def probar_deteccion(texto, medio="La Tercera", link="https://www.latercera.com/prueba"):
@@ -3587,18 +3343,11 @@ def main():
     ap.add_argument("--intervalo", type=int, default=15, help="minutos entre pasadas")
     ap.add_argument("--probar-correo", action="store_true", help="envía un correo de prueba")
     ap.add_argument("--diagnostico", action="store_true", help="descubre fuentes y sale")
-    ap.add_argument("--validar-fuentes", action="store_true", help="valida el catálogo mínimo sin red")
-    ap.add_argument("--probar-url", metavar="URL", help="descarga y evalúa una noticia concreta")
     ap.add_argument("--probar-deteccion", metavar="TEXTO", help="evalúa el motor UAF sobre un texto")
     args = ap.parse_args()
 
     if args.probar_correo:
         prueba_correo()
-        return
-    if args.validar_fuentes:
-        raise SystemExit(validar_fuentes_config())
-    if args.probar_url:
-        probar_url(args.probar_url)
         return
     if args.probar_deteccion:
         probar_deteccion(args.probar_deteccion)
