@@ -2474,6 +2474,49 @@ def _registra_cobertura(host, canal, n=1):
     fila["canales"][canal] = fila["canales"].get(canal, 0) + n
 
 
+def recolecta_retrospectiva():
+    """Consultas retrospectivas para atrapar notas que se escaparon del descubrimiento inicial.
+
+    Google News permite «after:YYYY-MM-DD before:YYYY-MM-DD» para buscar ventanas pasadas.
+    Cada corrida revisa una franja de 3 días elegida al azar de los últimos 30, de modo que en
+    el transcurso de la semana se cubren prácticamente todos los días del historial.
+    """
+    import random
+    ahora = datetime.now(TZ_CL)
+    # Elegimos una ventana de 3 días entre 3 y 28 días atrás (las últimas 72h ya están bien cubiertas)
+    offset = random.randint(3, min(VENTANA_DIAS - 2, 28))
+    desde = (ahora - timedelta(days=offset + 2)).strftime("%Y-%m-%d")
+    hasta = (ahora - timedelta(days=offset)).strftime("%Y-%m-%d")
+    consultas_retro = [
+        f'"Unidad de Análisis Financiero" after:{desde} before:{hasta}',
+        f'"UAF" "lavado de activos" after:{desde} before:{hasta}',
+        f'"lavado de activos" Chile after:{desde} before:{hasta}',
+        f'"operaciones sospechosas" Chile after:{desde} before:{hasta}',
+    ]
+    # Añadir site: para los 8 medios de mayor volumen
+    for dominio in DOMINIOS_PRIORITARIOS[:8]:
+        consultas_retro.append(
+            f'site:{dominio} ("Unidad de Análisis Financiero" OR "lavado de activos") '
+            f'after:{desde} before:{hasta}')
+
+    def tarea(q):
+        def _ejecuta():
+            if tiempo_agotado(reserva=220):
+                return []
+            url = ("https://news.google.com/rss/search?q=" + urllib.parse.quote(q)
+                   + "&hl=es-419&gl=CL&ceid=CL:es-419")
+            hallazgos = lee_feed(url, "Google News retro")
+            for r in hallazgos:
+                r["origen_busqueda"] = f"retro:{q}"[:180]
+            return hallazgos
+        return _ejecuta
+
+    salida = en_paralelo([tarea(q) for q in consultas_retro], "retrospectiva")
+    if salida:
+        log(f"  · Retrospectiva {desde}/{hasta} → {len(salida)} resultados")
+    return salida
+
+
 def recolecta_prensa(estado, cuerpos_previos):
     INFORME_COBERTURA.clear()
     crudos = []
@@ -2484,6 +2527,7 @@ def recolecta_prensa(estado, cuerpos_previos):
     crudos += recolecta_feeds_medios(estado)
     crudos += recolecta_sitemaps(estado)
     crudos += recolecta_uaf_oficial()
+    crudos += recolecta_retrospectiva()
 
     candidatos = {}
     descartados = 0
