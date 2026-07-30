@@ -153,23 +153,24 @@ jobs:
           set -o pipefail
           python3 -u monitor_uaf.py --modo "$MODO" 2>&1 | tee monitor.log
 
-      - name: Comprobar salida del monitor
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test -s datos.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          p = Path('datos.json')
-          d = json.loads(p.read_text(encoding='utf-8'))
-          print('datos.json:', p.stat().st_size, 'bytes')
-          print('versión:', d.get('version_motor'))
-          print('modo:', d.get('modo_ejecucion'))
-          print('publicaciones:', len(d.get('prensa', [])))
-          print('auditoría:', d.get('auditoria', {}))
-          PY
+      - name: Ejecutar monitor
+  if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+  env:
+    MONITOR_CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
+    MONITOR_SMTP_SERVIDOR: ${{ secrets.MONITOR_SMTP_SERVIDOR }}
+    MONITOR_SMTP_PUERTO: ${{ secrets.MONITOR_SMTP_PUERTO }}
+    MONITOR_SMTP_SEGURIDAD: ${{ secrets.MONITOR_SMTP_SEGURIDAD }}
+    MONITOR_SMTP_USUARIO: ${{ secrets.MONITOR_SMTP_USUARIO }}
+    MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
+    MONITOR_DESTINATARIOS: ${{ secrets.MONITOR_DESTINATARIOS }}
+    MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
+    MONITOR_MINIMO_AVISO: ${{ secrets.MONITOR_MINIMO_AVISO }}
+    MONITOR_SILENCIO_MINUTOS: ${{ secrets.MONITOR_SILENCIO_MINUTOS }}
+    MONITOR_SOLO_UAF: ${{ secrets.MONITOR_SOLO_UAF }}
+  shell: bash
+  run: |
+    set -o pipefail
+    python3 -u monitor_uaf.py --modo "$MODO" 2>&1 | tee monitor.log
 
       - name: Construir sitio estático
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
