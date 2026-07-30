@@ -1,16 +1,16 @@
-Monitor UAF Chile v7.4
+Monitor UAF Chile v8.1
 
-.github/workflows/monitor.yml
-.gitignore
-README.md
-INSTRUCCIONES_SUBIDA.txt
-CHANGELOG_V7_4.md
-monitor_uaf.py
-construye_sitio.py
-fuentes_uaf.json
-semillas_verificadas.json
-casos_control.json
-auditoria.html
-test_monitor.py
+Reemplazar:
+- monitor_uaf.py
+- index.html
+- auditoria.html
 
-El paquete no incluye index.html: debe conservarse el dashboard existente del repositorio.
+Agregar si no existe:
+- exclusiones_editoriales.json
+
+Opcionales:
+- test_control_editorial.py
+- test_delitos_contextuales.py
+- test_calidad_profunda.py
+- CAMBIOS_V8_1.md
+- INSTRUCCIONES_V8_1.txt

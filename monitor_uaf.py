@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Monitor UAF Chile · motor v7.4 con barrido profundo verificable.
+"""Monitor UAF Chile · motor v8.1 con control profundo de pertinencia y clasificación contextual.
 
 Modos:
   rapido         Monitoreo oportuno para ejecutar cada 15 minutos.
@@ -93,11 +93,12 @@ CONFIG = BASE / "config.json"
 FUENTES_ARCHIVO = BASE / "fuentes_uaf.json"
 CASOS_CONTROL_ARCHIVO = BASE / "casos_control.json"
 SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
+EXCLUSIONES_EDITORIALES_ARCHIVO = BASE / "exclusiones_editoriales.json"
 
-VERSION_MONITOR = "7.4-barrido-profundo-sin-uaf-cl"
-ESQUEMA_ESTADO = 5
+VERSION_MONITOR = "8.1-calidad-profunda"
+ESQUEMA_ESTADO = 8
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
-UA = "Mozilla/5.0 (compatible; MonitorUAF/7.4; +https://github.com/)"
+UA = "Mozilla/5.0 (compatible; MonitorUAF/8.1; +https://github.com/)"
 UA_ROBOTS = "MonitorUAF"
 
 CONFIG_EJEMPLO = {
@@ -153,8 +154,36 @@ MAX_SITEMAPS_POR_FUENTE = env_int("MONITOR_MAX_SITEMAPS_FUENTE", 10)
 MAX_URLS_SITEMAP = env_int("MONITOR_MAX_URLS_SITEMAP", 450)
 MIN_POR_FUENTE = env_int("MONITOR_BARRIDO_MIN_FUENTE", 2)
 MODO_ENV = os.getenv("MONITOR_MODO", "rapido").strip().lower()
-SOLO_MENCIONES_UAF_DASHBOARD = env_bool("MONITOR_DASHBOARD_SOLO_UAF", True)
+# Compatibilidad: el monitor conserva menciones directas UAF y contexto LA/FT
+# sustantivo. Para restringirlo solo a UAF, define MONITOR_INCLUIR_CONTEXTO_LAFT=false.
+INCLUIR_CONTEXTO_LAFT = env_bool("MONITOR_INCLUIR_CONTEXTO_LAFT", True)
+SOLO_MENCIONES_UAF_DASHBOARD = not INCLUIR_CONTEXTO_LAFT
 DOMINIOS_EXCLUIDOS_PUBLICACION = {"uaf.cl"}
+
+
+# Exclusiones auditables para URLs que fueron verificadas como falsos positivos.
+# La lista externa permite corregir casos puntuales sin volver a modificar el motor.
+URLS_EXCLUIDAS_PREDETERMINADAS = {
+    "https://www.eldinamo.cl/sociedad/2026/07/29/tras-muerte-de-tripulante-extranjero-los-virus-que-pueden-causar-la-fiebre-hemorragica",
+}
+
+def carga_exclusiones_editoriales() -> set[str]:
+    urls = {url_canonica(u) for u in URLS_EXCLUIDAS_PREDETERMINADAS}
+    if EXCLUSIONES_EDITORIALES_ARCHIVO.exists():
+        try:
+            data = json.loads(EXCLUSIONES_EDITORIALES_ARCHIVO.read_text(encoding="utf-8"))
+            items = data.get("exclusiones", []) if isinstance(data, dict) else data
+            for item in items:
+                url = item.get("link") if isinstance(item, dict) else item
+                if url:
+                    urls.add(url_canonica(str(url)))
+        except Exception as exc:
+            log(f"! exclusiones_editoriales.json inválido: {type(exc).__name__}: {exc}")
+    return urls
+
+
+def url_excluida_editorialmente(url: str) -> bool:
+    return url_canonica(url) in carga_exclusiones_editoriales()
 
 INICIO = time.monotonic()
 
@@ -396,6 +425,7 @@ PRECEDENTES = {
     "delitos_economicos": ["delitos economicos", "ley 21.595", "administracion desleal"],
     "trata": ["trata de personas", "explotacion sexual"],
     "tributarios": ["delito tributario", "evasión", "evasion", "facturas falsas"],
+    "extorsion_secuestro": ["extorsion", "extorsión", "secuestro", "secuestros", "secuestrado", "secuestrada", "rapto", "privacion de libertad", "privación de libertad"],
 }
 
 TOPICOS = {
@@ -440,7 +470,7 @@ LABELS = {
     "precedentes": {
         "corrupcion": "Corrupción", "narcotrafico": "Narcotráfico", "contrabando": "Contrabando",
         "fraude": "Fraude y estafa", "delitos_economicos": "Delitos económicos", "trata": "Trata de personas",
-        "tributarios": "Delitos tributarios", "indeterminado": "No determinado",
+        "tributarios": "Delitos tributarios", "extorsion_secuestro": "Extorsión y secuestro", "indeterminado": "No determinado",
     },
     "topicos": {
         "prevencion": "Prevención de LA/FT", "investigacion_penal": "Investigación y persecución penal",
@@ -532,6 +562,72 @@ def id_registro(url: str, titulo: str = "") -> str:
 def contiene(texto: str, agujas: Iterable[str]) -> bool:
     t = normaliza(texto)
     return any(normaliza(a) in t for a in agujas)
+
+
+@lru_cache(maxsize=4096)
+def _patron_frase(aguja: str) -> re.Pattern[str] | None:
+    """Compila una frase con límites léxicos.
+
+    Evita coincidencias por subcadena: por ejemplo, ``ros`` ya no coincide con
+    ``otros`` o ``numerosos``. Los separadores entre palabras pueden ser espacios,
+    guiones, puntos o barras, lo que permite reconocer ``Ley 19.913``.
+    """
+    a = normaliza(aguja)
+    tokens = re.findall(r"[a-z0-9]+", a)
+    if not tokens:
+        return None
+    cuerpo = r"[^a-z0-9]+".join(re.escape(x) for x in tokens)
+    return re.compile(r"(?<![a-z0-9])" + cuerpo + r"(?![a-z0-9])", re.I)
+
+
+def contiene_frase(texto: Any, agujas: Iterable[str]) -> bool:
+    t = normaliza(texto)
+    for aguja in agujas:
+        a = str(aguja or "")
+        # Los marcadores de URL se evalúan literalmente.
+        if a.startswith("/") or a.endswith("/"):
+            if a.lower() in str(texto or "").lower():
+                return True
+            continue
+        patron = _patron_frase(a)
+        if patron and patron.search(t):
+            return True
+    return False
+
+
+def cuenta_frases(texto: Any, agujas: Iterable[str]) -> int:
+    t = normaliza(texto)
+    total = 0
+    for aguja in agujas:
+        patron = _patron_frase(str(aguja or ""))
+        if patron:
+            total += len(list(patron.finditer(t)))
+    return total
+
+
+def segmenta_editorial(texto: Any, limite: int = 80) -> list[str]:
+    """Segmenta texto guardado incluso cuando perdió los saltos de línea."""
+    limpio = limpia_texto(texto)
+    if not limpio:
+        return []
+    partes = re.split(r"(?:[.!?](?:[\"'»”)]*)\s+)|[\r\n]+", limpio)
+    salida: list[str] = []
+    acumulado = ""
+    for parte in partes:
+        parte = parte.strip()
+        if not parte:
+            continue
+        if acumulado and len(acumulado) + len(parte) < 150:
+            acumulado += ". " + parte
+            continue
+        if acumulado:
+            salida.append(acumulado[:900])
+        acumulado = parte
+        if len(salida) >= limite:
+            break
+    if acumulado and len(salida) < limite:
+        salida.append(acumulado[:900])
+    return salida
 
 
 def ahora_cl() -> datetime:
@@ -689,7 +785,34 @@ def descarga(url: str, *, permite_robots: bool = True, max_bytes: int = MAX_BYTE
 # ---------------------------------------------------------------------------
 
 
+TOKENS_CONTENEDOR_EXCLUIDO = {
+    "related", "relacionad", "recommend", "recomend", "latest", "ultima-noticia",
+    "ultimas-noticias", "lo-mas-leido", "most-read", "sidebar", "aside", "widget",
+    "newsletter", "suscripcion", "subscription", "comments", "comentarios", "footer",
+    "breadcrumb", "share", "social-share", "author-box", "tags", "outbrain", "taboola",
+    "advert", "publicidad", "promo", "carousel", "mas-noticias", "more-news",
+}
+TOKENS_CONTENEDOR_EDITORIAL = {
+    "article-body", "article-content", "entry-content", "post-content", "story-body",
+    "nota-cuerpo", "contenido-nota", "cuerpo-nota", "single-content", "content-body",
+    "article__body", "article_body", "post-body", "news-body",
+}
+MARCADORES_CORTE_DURO = {
+    "notas relacionadas", "ultimas noticias", "ultimas noticias del dia", "mas noticias",
+    "otras noticias", "lo mas leido", "recomendados", "contenido recomendado",
+    "tambien te puede interesar", "te puede interesar", "articulos relacionados",
+}
+MARCADORES_PAUSA = {"lee tambien", "tambien lee", "ver tambien"}
+
+
 class DocumentoHTML(HTMLParser):
+    """Extrae contenido conservando la frontera editorial del artículo.
+
+    Los portales suelen incluir dentro de ``<main>`` o incluso ``<article>`` módulos
+    de recomendaciones. El parser identifica contenedores de ruido por class/id,
+    registra encabezados en orden y permite excluir esos módulos antes de clasificar.
+    """
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.titulo: list[str] = []
@@ -702,19 +825,87 @@ class DocumentoHTML(HTMLParser):
         self._en_a = False
         self._en_p = False
         self._p_text: list[str] = []
+        self._p_excluido = False
+        self._p_contenido = False
+        self._p_article = False
+        self._p_main = False
+        self._en_heading = False
+        self._heading_text: list[str] = []
+        self._heading_level = 0
+        self._heading_excluido = False
+        self._heading_contenido = False
+        self._heading_article = False
+        self._heading_main = False
         self._prof_article = 0
         self._prof_main = 0
+        self._regiones: list[dict[str, Any]] = []
         self.parrafos_article: list[str] = []
         self.parrafos_main: list[str] = []
+        self.parrafos_contenido: list[str] = []
         self.parrafos: list[str] = []
+        self.bloques_article: list[tuple[str, int, str]] = []
+        self.bloques_main: list[tuple[str, int, str]] = []
+        self.bloques_contenido: list[tuple[str, int, str]] = []
+        self.bloques: list[tuple[str, int, str]] = []
         self._script_tipo = ""
         self._script_text: list[str] = []
         self.json_ld: list[str] = []
         self.time_values: list[str] = []
+        self.ruido_omitido = 0
+
+    @staticmethod
+    def _firma_attrs(attrs: dict[str, str]) -> str:
+        claves = ("id", "class", "role", "aria-label", "data-testid", "data-component", "data-module")
+        return normaliza(" ".join(attrs.get(k, "") for k in claves))
+
+    def _estado_region(self) -> tuple[bool, bool]:
+        if not self._regiones:
+            return False, False
+        actual = self._regiones[-1]
+        return bool(actual["excluido"]), bool(actual["contenido"])
+
+    def _abre_region(self, tag: str, attrs: dict[str, str]) -> None:
+        padre_excluido, padre_contenido = self._estado_region()
+        firma = self._firma_attrs(attrs)
+        excluido = padre_excluido or any(tok in firma for tok in TOKENS_CONTENEDOR_EXCLUIDO)
+        contenido = padre_contenido or any(tok in firma for tok in TOKENS_CONTENEDOR_EDITORIAL)
+        self._regiones.append({"tag": tag, "excluido": excluido, "contenido": contenido})
+
+    def _cierra_region(self, tag: str) -> None:
+        for i in range(len(self._regiones) - 1, -1, -1):
+            if self._regiones[i]["tag"] == tag:
+                del self._regiones[i:]
+                return
+
+    def _agrega_bloque(self, tipo: str, nivel: int, texto: str, *, excluido: bool,
+                       contenido: bool, article: bool, main: bool) -> None:
+        texto = limpia_texto(texto)
+        if not texto or excluido:
+            if texto and excluido:
+                self.ruido_omitido += 1
+            return
+        bloque = (tipo, nivel, texto)
+        self.bloques.append(bloque)
+        if article:
+            self.bloques_article.append(bloque)
+        if main:
+            self.bloques_main.append(bloque)
+        if contenido:
+            self.bloques_contenido.append(bloque)
+        if tipo == "p" and len(texto) >= 35:
+            self.parrafos.append(texto)
+            if article:
+                self.parrafos_article.append(texto)
+            if main:
+                self.parrafos_main.append(texto)
+            if contenido:
+                self.parrafos_contenido.append(texto)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         a = {k.lower(): (v or "") for k, v in attrs}
         tag = tag.lower()
+        if tag in {"div", "section", "article", "main", "aside", "nav", "footer", "header"}:
+            self._abre_region(tag, a)
         if tag == "title":
             self.en_title = True
         elif tag == "meta":
@@ -737,8 +928,22 @@ class DocumentoHTML(HTMLParser):
         elif tag == "main":
             self._prof_main += 1
         elif tag == "p":
+            excluido, contenido = self._estado_region()
             self._en_p = True
             self._p_text = []
+            self._p_excluido = excluido
+            self._p_contenido = contenido
+            self._p_article = self._prof_article > 0
+            self._p_main = self._prof_main > 0
+        elif re.fullmatch(r"h[1-6]", tag):
+            excluido, contenido = self._estado_region()
+            self._en_heading = True
+            self._heading_text = []
+            self._heading_level = int(tag[1])
+            self._heading_excluido = excluido
+            self._heading_contenido = contenido
+            self._heading_article = self._prof_article > 0
+            self._heading_main = self._prof_main > 0
         elif tag == "script":
             self._script_tipo = a.get("type", "").lower()
             self._script_text = []
@@ -754,18 +959,14 @@ class DocumentoHTML(HTMLParser):
             self.links.append((self._a_href, self._a_rel, texto))
             self._en_a = False
         elif tag == "p" and self._en_p:
-            texto = limpia_texto(" ".join(self._p_text))
-            if len(texto) >= 35:
-                self.parrafos.append(texto)
-                if self._prof_article:
-                    self.parrafos_article.append(texto)
-                if self._prof_main:
-                    self.parrafos_main.append(texto)
+            self._agrega_bloque("p", 0, " ".join(self._p_text), excluido=self._p_excluido,
+                                contenido=self._p_contenido, article=self._p_article, main=self._p_main)
             self._en_p = False
-        elif tag == "article" and self._prof_article:
-            self._prof_article -= 1
-        elif tag == "main" and self._prof_main:
-            self._prof_main -= 1
+        elif re.fullmatch(r"h[1-6]", tag) and self._en_heading:
+            self._agrega_bloque("h", self._heading_level, " ".join(self._heading_text),
+                                excluido=self._heading_excluido, contenido=self._heading_contenido,
+                                article=self._heading_article, main=self._heading_main)
+            self._en_heading = False
         elif tag == "script":
             if "ld+json" in self._script_tipo:
                 texto = "".join(self._script_text).strip()
@@ -773,6 +974,12 @@ class DocumentoHTML(HTMLParser):
                     self.json_ld.append(texto)
             self._script_tipo = ""
             self._script_text = []
+        if tag == "article" and self._prof_article:
+            self._prof_article -= 1
+        if tag == "main" and self._prof_main:
+            self._prof_main -= 1
+        if tag in {"div", "section", "article", "main", "aside", "nav", "footer", "header"}:
+            self._cierra_region(tag)
 
     def handle_data(self, data: str) -> None:
         if self.en_title:
@@ -781,8 +988,58 @@ class DocumentoHTML(HTMLParser):
             self._a_text.append(data)
         if self._en_p:
             self._p_text.append(data)
+        if self._en_heading:
+            self._heading_text.append(data)
         if self._script_tipo:
             self._script_text.append(data)
+
+
+def selecciona_bloques_editoriales(bloques: list[tuple[str, int, str]]) -> tuple[list[str], int]:
+    """Conserva párrafos editoriales y descarta módulos insertos o posteriores."""
+    salida: list[str] = []
+    vistos: set[str] = set()
+    pausa_nivel: int | None = None
+    omitidos = 0
+    for tipo, nivel, valor in bloques:
+        n = normaliza(valor)
+        if tipo == "h":
+            if any(m in n for m in MARCADORES_CORTE_DURO):
+                break
+            if any(m in n for m in MARCADORES_PAUSA):
+                pausa_nivel = nivel or 3
+                continue
+            if pausa_nivel is not None and nivel and nivel <= pausa_nivel:
+                pausa_nivel = None
+            continue
+        if pausa_nivel is not None:
+            omitidos += 1
+            continue
+        if len(n) < 35 or n in vistos:
+            continue
+        if contiene(n, ["suscribete", "inicia sesion", "todos los derechos reservados",
+                        "compartir en facebook", "publicidad", "newsletter", "aceptar cookies"]):
+            omitidos += 1
+            continue
+        vistos.add(n)
+        salida.append(valor)
+    return salida, omitidos
+
+
+def recorta_texto_editorial(texto: str) -> str:
+    """Recorta colas inequívocas de recomendaciones en articleBody/JSON-LD."""
+    texto = limpia_texto(texto)
+    if not texto:
+        return ""
+    patron = re.compile(
+        r"(?:^|\n|\r|\s{2,})(?:notas relacionadas|ultimas noticias(?: del dia)?|"
+        r"mas noticias|otras noticias|lo mas leido|contenido recomendado|articulos relacionados)\b",
+        re.I,
+    )
+    normal = normaliza(texto)
+    m = patron.search(normal)
+    if m and m.start() >= 160:
+        return texto[:m.start()].strip()
+    return texto
 
 
 def decode_html(raw: bytes, headers: dict[str, str] | None = None) -> str:
@@ -848,19 +1105,24 @@ def extrae_articulo_html(raw: bytes, url: str, headers: dict[str, str] | None = 
                 if isinstance(canonical, dict):
                     canonical = canonical.get("@id", "")
 
-    parrafos = parser.parrafos_article or parser.parrafos_main or parser.parrafos
-    # Quita frases de navegación y publicidad reiteradas.
-    limpios: list[str] = []
-    vistos: set[str] = set()
-    for p in parrafos:
-        n = normaliza(p)
-        if len(n) < 35 or n in vistos:
-            continue
-        if contiene(n, ["suscribete", "inicia sesion", "todos los derechos reservados", "compartir en facebook", "publicidad"]):
-            continue
-        vistos.add(n)
-        limpios.append(p)
-    cuerpo = limpia_texto(cuerpo_json) or "\n".join(limpios)
+    cuerpo_json_limpio = recorta_texto_editorial(cuerpo_json)
+    candidatos_cuerpo: list[tuple[str, str, str, int]] = []
+    if len(cuerpo_json_limpio) >= 160:
+        candidatos_cuerpo.append(("json_ld", cuerpo_json_limpio, "alta", 0))
+    for origen, bloques, calidad in (
+        ("contenedor_editorial", parser.bloques_contenido, "alta"),
+        ("article", parser.bloques_article, "alta"),
+        ("main", parser.bloques_main, "media"),
+        ("pagina", parser.bloques, "baja"),
+    ):
+        ps, omitidos = selecciona_bloques_editoriales(bloques)
+        cuerpo_candidato = "\n".join(ps)
+        if len(cuerpo_candidato) >= 160:
+            candidatos_cuerpo.append((origen, cuerpo_candidato, calidad, omitidos))
+    if candidatos_cuerpo:
+        origen_cuerpo, cuerpo, calidad_cuerpo, omitidos = candidatos_cuerpo[0]
+    else:
+        origen_cuerpo, cuerpo, calidad_cuerpo, omitidos = "sin_cuerpo", "", "baja", 0
     if len(cuerpo) > MAX_TEXTO_ANALISIS:
         cuerpo = cuerpo[:MAX_TEXTO_ANALISIS]
     fecha_dt = parsea_fecha(fecha_valor, canonical or url)
@@ -873,6 +1135,10 @@ def extrae_articulo_html(raw: bytes, url: str, headers: dict[str, str] | None = 
         "titulo": limpia_texto(titulo)[:500],
         "resumen": limpia_texto(descripcion)[:1200],
         "texto_enriquecido": cuerpo,
+        "origen_cuerpo": origen_cuerpo,
+        "calidad_cuerpo": calidad_cuerpo,
+        "parrafos_cuerpo": cuerpo.count("\n") + (1 if cuerpo else 0),
+        "bloques_ruido_omitidos": parser.ruido_omitido + omitidos,
         "fecha_dt": fecha_dt,
         "url_final": url_canonica(canonical or url),
         "amp_url": url_canonica(amp),
@@ -1466,6 +1732,10 @@ def enriquece_articulo(reg: dict[str, Any]) -> dict[str, Any]:
         if art.get("resumen") and len(art["resumen"]) > len(r.get("resumen", "")):
             r["resumen"] = art["resumen"]
         r["texto_enriquecido"] = art.get("texto_enriquecido", "")
+        r["origen_cuerpo"] = art.get("origen_cuerpo", "sin_cuerpo")
+        r["calidad_cuerpo"] = art.get("calidad_cuerpo", "baja")
+        r["parrafos_cuerpo"] = art.get("parrafos_cuerpo", 0)
+        r["bloques_ruido_omitidos"] = art.get("bloques_ruido_omitidos", 0)
         r["fecha_dt"] = art.get("fecha_dt") or r.get("fecha_dt") or parsea_fecha("", final)
         r["link"] = art.get("url_final") or url_canonica(final) or url
         r["url_final"] = r["link"]
@@ -1484,9 +1754,12 @@ def enriquece_articulo(reg: dict[str, Any]) -> dict[str, Any]:
 
 
 def texto_registro(reg: dict[str, Any]) -> str:
+    # La evidencia de buscadores/semillas solo participa cuando fue verificada
+    # manualmente. Así un snippet desalineado no puede contaminar otro artículo.
+    evidencia = reg.get("evidencia_uaf", "") if reg.get("verificacion_manual") else ""
     return " ".join([
         reg.get("titulo", ""), reg.get("resumen", ""),
-        reg.get("texto_enriquecido", ""), reg.get("evidencia_uaf", ""),
+        reg.get("texto_enriquecido", ""), evidencia,
     ])[:MAX_TEXTO_ANALISIS]
 
 
@@ -1494,51 +1767,214 @@ def ventanas_uaf(texto: str, ancho: int = 520) -> list[str]:
     return [texto[max(0, m.start() - ancho): min(len(texto), m.end() + ancho)] for m in MENCION_UAF_RE.finditer(texto)]
 
 
+# Patrones fuertes de relación LA/FT. Se usan con límites léxicos y no como
+# simples subcadenas.
+LAFT_FRASES_FUERTES = [
+    "lavado de activos", "lavado de dinero", "blanqueo de capitales",
+    "financiamiento del terrorismo", "reporte de operaciones sospechosas",
+    "reportes de operaciones sospechosas", "operaciones sospechosas",
+    "sujeto obligado", "sujetos obligados", "sistema antilavado",
+]
+LAFT_FRASES_COMPLEMENTARIAS = [
+    "beneficiario final", "debida diligencia", "testaferro", "testaferros",
+    "cuenta puente", "cuentas puente", "ruta del dinero", "economía ilícita",
+    "economías ilícitas", "comiso", "decomiso", "trazabilidad financiera",
+]
+ANCLAS_FINANCIERAS = [
+    "dinero", "fondos", "transferencia", "transferencias", "cuenta bancaria",
+    "cuentas bancarias", "banco", "bancos", "banca", "patrimonio", "activos",
+    "flujo financiero", "operación financiera", "operaciones financieras",
+    "sociedad", "sociedades", "empresa", "empresas", "efectivo", "remesa",
+]
+ANCLAS_PENALES = [
+    "fiscalía", "fiscalia", "investigación penal", "formalización", "formalizacion",
+    "imputado", "imputada", "condena", "delito", "organización criminal",
+    "organizacion criminal", "crimen organizado", "incautación", "incautacion",
+]
+UAF_ACCIONES = [
+    "informó a la uaf", "informo a la uaf", "reportó a la uaf", "reporto a la uaf",
+    "remitió antecedentes a la uaf", "remitio antecedentes a la uaf",
+    "envió antecedentes a la uaf", "envio antecedentes a la uaf",
+    "solicitó a la uaf", "solicito a la uaf", "alertas de la uaf",
+    "director de la uaf", "directora de la uaf", "director subrogante de la uaf",
+    "facultades de la uaf", "fiscalizados por la uaf", "fiscalizadas por la uaf",
+    "reportes a la uaf", "coordinación con la uaf", "coordinacion con la uaf",
+    "la uaf recibió", "la uaf recibio", "la uaf señaló", "la uaf senalo",
+    "la uaf informó", "la uaf informo", "la uaf detectó", "la uaf detecto",
+]
+UAF_AMBIGUAS = [
+    "unidad de atención familiar", "unidad de atencion familiar",
+    "unidad de apoyo financiero", "unidad administrativa financiera",
+    "unidad académica", "unidad academica", "universidad autónoma",
+    "universidad autonoma", "fuerza aérea", "fuerza aerea",
+]
+PAISES_UAF_EXTRANJERA = ["panamá", "panama", "guatemala", "bolivia", "paraguay", "perú", "peru", "ecuador", "colombia", "méxico", "mexico", "argentina", "uruguay", "honduras", "el salvador", "costa rica", "república dominicana", "republica dominicana"]
+RE_UAF_EXTRANJERA = re.compile(r"\b(?:u\.?a\.?f\.?|unidad\s+de\s+an[aá]lisis\s+financiero)\s+(?:de|del|en)\s+(?:" + "|".join(re.escape(normaliza(x)) for x in PAISES_UAF_EXTRANJERA) + r")\b", re.I)
+MARCADORES_LISTA_GENERICA = [
+    "entre otros delitos", "entre ellos", "tales como", "delitos como",
+    "catálogo de delitos", "catalogo de delitos", "lista de delitos",
+    "incluye delitos", "comprende delitos", "diversos delitos",
+]
+
+
+def _fragmentos_editoriales(reg: dict[str, Any]) -> list[tuple[str, str]]:
+    """Fragmentos jerarquizados para pertinencia y clasificación.
+
+    No utiliza el cuerpo como una bolsa única de palabras: privilegia titular,
+    bajada, inicio del artículo y ventanas próximas a UAF/LAFT.
+    """
+    salida: list[tuple[str, str]] = []
+    titulo = limpia_texto(reg.get("titulo", ""))
+    bajada = limpia_texto(reg.get("resumen", ""))
+    cuerpo = str(reg.get("texto_enriquecido", "") or "")
+    if titulo:
+        salida.append(("titulo", titulo))
+    if bajada:
+        salida.append(("bajada", bajada))
+    segmentos = segmenta_editorial(cuerpo)
+    for seg in segmentos[:6]:
+        salida.append(("inicio_cuerpo", seg))
+    señales = ["uaf", "unidad de análisis financiero", "unidad de analisis financiero"] + LAFT_FRASES_FUERTES + LAFT_FRASES_COMPLEMENTARIAS
+    for seg in segmentos[6:]:
+        if contiene_frase(seg, señales):
+            salida.append(("cuerpo_relevante", seg))
+        if len(salida) >= 30:
+            break
+    # Ventanas precisas alrededor de menciones UAF y de las expresiones LA/FT fuertes.
+    for v in ventanas_uaf(cuerpo, 360)[:6]:
+        salida.append(("contexto_uaf", limpia_texto(v)))
+    cuerpo_norm = normaliza(cuerpo)
+    for frase in LAFT_FRASES_FUERTES:
+        patron = _patron_frase(frase)
+        if not patron:
+            continue
+        for m in list(patron.finditer(cuerpo_norm))[:3]:
+            salida.append(("contexto_laft", limpia_texto(cuerpo[max(0, m.start()-320):m.end()+420])))
+    # Si el mismo fragmento aparece como inicio y como contexto UAF/LAFT,
+    # conserva el origen más informativo en lugar del primero encontrado.
+    prioridad = {"titulo": 7, "bajada": 6, "contexto_uaf": 5, "contexto_laft": 5, "inicio_cuerpo": 3, "cuerpo_relevante": 2}
+    por_clave: dict[str, tuple[str, str]] = {}
+    orden: list[str] = []
+    for origen, frag in salida:
+        clave = normaliza(frag)
+        if len(clave) < 12:
+            continue
+        anterior = por_clave.get(clave)
+        if anterior is None:
+            por_clave[clave] = (origen, frag[:1200]); orden.append(clave)
+        elif prioridad.get(origen, 0) > prioridad.get(anterior[0], 0):
+            por_clave[clave] = (origen, frag[:1200])
+    return [por_clave[k] for k in orden][:36]
+
+
+def _es_lista_generica(fragmento: str) -> bool:
+    f = normaliza(fragmento)
+    return contiene_frase(f, MARCADORES_LISTA_GENERICA)
+
+
+def evalua_contexto_laft(reg: dict[str, Any]) -> dict[str, Any]:
+    """Determina si existe relación sustantiva con LA/FT sin exigir mención UAF."""
+    fragmentos = _fragmentos_editoriales(reg)
+    pesos = {"titulo": 7, "bajada": 6, "contexto_uaf": 5, "contexto_laft": 5, "inicio_cuerpo": 3, "cuerpo_relevante": 2}
+    mejor = {"valido": False, "puntaje": 0, "confianza": "sin señal", "evidencia": "", "motivos": []}
+    fragmentos_fuertes = 0
+    total_fuertes = 0
+    for origen, frag in fragmentos:
+        fuertes = cuenta_frases(frag, LAFT_FRASES_FUERTES)
+        complementarias = cuenta_frases(frag, LAFT_FRASES_COMPLEMENTARIAS)
+        if not fuertes and not complementarias:
+            continue
+        if fuertes:
+            fragmentos_fuertes += 1
+            total_fuertes += fuertes
+        score = pesos.get(origen, 1) + min(6, fuertes * 4) + min(3, complementarias * 2)
+        motivos: list[str] = [f"señal LA/FT en {origen}"]
+        if contiene_frase(frag, ANCLAS_FINANCIERAS):
+            score += 2; motivos.append("anclaje financiero")
+        if contiene_frase(frag, ANCLAS_PENALES):
+            score += 2; motivos.append("anclaje penal")
+        if MENCION_UAF_RE.search(frag):
+            score += 2; motivos.append("mención UAF próxima")
+        if _es_lista_generica(frag):
+            score -= 5; motivos.append("mención en enumeración genérica")
+        # Expresiones complementarias aisladas no bastan por sí solas.
+        if not fuertes and not (contiene_frase(frag, ANCLAS_FINANCIERAS) and contiene_frase(frag, ANCLAS_PENALES)):
+            score -= 4; motivos.append("señal complementaria sin contexto suficiente")
+        valido = score >= (8 if origen in {"titulo", "bajada"} else 9)
+        cand = {"valido": valido, "puntaje": score, "confianza": "alta" if score >= 13 else "media" if valido else "baja", "evidencia": frag[:650], "origen": origen, "motivos": motivos}
+        if cand["puntaje"] > mejor["puntaje"]:
+            mejor = cand
+    # Repetición en fragmentos distintos puede confirmar un tema corporal.
+    if not mejor["valido"] and fragmentos_fuertes >= 2 and total_fuertes >= 2 and mejor["puntaje"] >= 6:
+        mejor["valido"] = True
+        mejor["confianza"] = "media"
+        mejor.setdefault("motivos", []).append("señal LA/FT repetida en el artículo")
+    return mejor
+
+
 def analiza_uaf(reg: dict[str, Any]) -> tuple[bool, str, list[str], int, int]:
-    texto_original = texto_registro(reg)
-    texto = normaliza(texto_original)
-    menciones = list(MENCION_UAF_RE.finditer(texto))
-    if not menciones:
-        return False, "sin_mencion", ["sin mención UAF"], 0, 0
     host = dominio_url(reg.get("link", ""))
     if host in DOMINIOS_EXCLUIDOS_PUBLICACION:
-        return False, "excluida", ["dominio excluido del dashboard"], 0, len(menciones)
+        return False, "excluida", ["dominio excluido del dashboard"], 0, 0
+    if url_excluida_editorialmente(reg.get("link", "")):
+        return False, "excluida", ["URL excluida tras validación editorial"], 0, 0
     if reg.get("verificacion_manual"):
-        return True, "alta", ["publicación verificada en barrido profundo", "mención UAF confirmada"], 25, len(menciones)
+        total = sum(len(list(MENCION_UAF_RE.finditer(normaliza(reg.get(c, ""))))) for c in ("titulo", "resumen", "texto_enriquecido", "evidencia_uaf"))
+        return True, "alta", ["publicación verificada en barrido profundo", "mención UAF confirmada"], 25, total
+
     fuente = fuente_para_host(host)
-    puntajes: list[tuple[int, list[str]]] = []
-    for m in menciones:
-        ventana = texto[max(0, m.start() - 520): min(len(texto), m.end() + 520)]
-        score = 0
-        motivos: list[str] = []
-        mencion = m.group(0)
-        if "unidad de analisis financiero" in mencion:
-            score += 5; motivos.append("nombre institucional")
-        elif re.fullmatch(r"u\.?a\.?f\.?", mencion):
-            score += 2; motivos.append("sigla UAF")
-        else:
-            score += 1
-        if fuente:
-            score += 2; motivos.append("fuente chilena catalogada")
-        if host in DOMINIOS_INSTITUCIONALES:
-            score += 2; motivos.append("fuente oficial chilena")
-        chile_hits = sum(1 for s in SENALES_CHILE if normaliza(s) in ventana)
-        laft_hits = sum(1 for s in SENALES_LAFT if normaliza(s) in ventana)
-        if chile_hits:
-            score += min(6, chile_hits * 2); motivos.append("contexto institucional chileno")
-        if laft_hits:
-            score += min(4, laft_hits); motivos.append("contexto LA/FT")
-        extranjeros = [s for s in SENALES_EXTRANJERAS if normaliza(s) in ventana]
-        if extranjeros:
-            score -= 8; motivos.append("contexto de unidad extranjera")
-        # UAF institucional se acepta incluso en noticias de actividades sin términos LA/FT.
-        if host == "estrategiaantilavado.cl":
-            score += 5; motivos.append("sitio del sistema antilavado chileno")
-        puntajes.append((score, motivos))
-    mejor, motivos = max(puntajes, key=lambda x: x[0])
-    valido = mejor >= 6
-    confianza = "alta" if mejor >= 10 else "media" if valido else "baja"
-    return valido, confianza, motivos, mejor, len(menciones)
+    calidad = str(reg.get("calidad_cuerpo", "desconocida"))
+    origen_cuerpo = str(reg.get("origen_cuerpo", "desconocido"))
+    puntajes: list[tuple[int, list[str], str, int]] = []
+    total_menciones = 0
+    for origen, contenido in (("titulo", reg.get("titulo", "")), ("bajada", reg.get("resumen", "")), ("cuerpo", reg.get("texto_enriquecido", ""))):
+        texto_original = str(contenido or "")
+        texto = normaliza(texto_original)
+        menciones = list(MENCION_UAF_RE.finditer(texto))
+        total_menciones += len(menciones)
+        for m in menciones:
+            ventana = texto[max(0, m.start()-480):min(len(texto), m.end()+480)]
+            mencion = m.group(0)
+            nombre_completo = "unidad de analisis financiero" in mencion
+            score = 6 if nombre_completo else 2
+            motivos = [f"mención en {origen}", "nombre institucional" if nombre_completo else "sigla UAF"]
+            score += {"titulo": 4, "bajada": 3, "cuerpo": 0}.get(origen, 0)
+            if origen == "cuerpo":
+                if calidad == "alta":
+                    score += 2; motivos.append(f"cuerpo editorial confiable ({origen_cuerpo})")
+                elif calidad in {"baja", "desconocida"} or origen_cuerpo in {"pagina", "desconocido", "sin_cuerpo"}:
+                    score -= 4; motivos.append("cuerpo de baja delimitación")
+            if fuente:
+                score += 2; motivos.append("fuente chilena catalogada")
+            if host in DOMINIOS_INSTITUCIONALES:
+                score += 1; motivos.append("fuente oficial chilena")
+            chile_hits = cuenta_frases(ventana, SENALES_CHILE)
+            laft_hits = cuenta_frases(ventana, LAFT_FRASES_FUERTES + LAFT_FRASES_COMPLEMENTARIAS)
+            if chile_hits:
+                score += min(5, chile_hits * 2); motivos.append("contexto chileno próximo")
+            if laft_hits:
+                score += min(5, laft_hits * 2); motivos.append("contexto LA/FT próximo")
+            if contiene_frase(ventana, UAF_ACCIONES):
+                score += 5; motivos.append("acción institucional inequívoca")
+            if contiene_frase(ventana, UAF_AMBIGUAS) and not nombre_completo:
+                score -= 12; motivos.append("sigla compatible con otro significado")
+            extranjeros = [x for x in SENALES_EXTRANJERAS if contiene_frase(ventana, [x])]
+            if extranjeros or RE_UAF_EXTRANJERA.search(ventana):
+                score -= 12; motivos.append("contexto de unidad extranjera")
+            # Una sigla corporal aislada no se valida por el solo hecho de estar en un medio chileno.
+            if origen == "cuerpo" and not nombre_completo and not contiene_frase(ventana, UAF_ACCIONES) and laft_hits == 0:
+                score -= 6; motivos.append("sigla corporal sin acción institucional ni LA/FT")
+            umbral = 7 if origen == "titulo" else 8 if origen == "bajada" else 9
+            if origen == "cuerpo" and calidad != "alta":
+                umbral = 12
+            puntajes.append((score, motivos, origen, umbral))
+    if not puntajes:
+        return False, "sin_mencion", ["sin mención UAF"], 0, 0
+    mejor, motivos, origen, umbral = max(puntajes, key=lambda x: x[0]-x[3])
+    valido = mejor >= umbral
+    motivos.append(f"umbral aplicado: {umbral}")
+    confianza = "alta" if valido and mejor >= umbral+3 else "media" if valido else "baja"
+    return valido, confianza, motivos, mejor, total_menciones
 
 
 def extrae_contexto_uaf(reg: dict[str, Any]) -> str:
@@ -1546,7 +1982,7 @@ def extrae_contexto_uaf(reg: dict[str, Any]) -> str:
     vs = ventanas_uaf(texto, 240)
     if not vs:
         return ""
-    mejor = max(vs, key=lambda v: sum(1 for s in SENALES_CHILE + SENALES_LAFT if normaliza(s) in normaliza(v)))
+    mejor = max(vs, key=lambda v: cuenta_frases(v, SENALES_CHILE + LAFT_FRASES_FUERTES + LAFT_FRASES_COMPLEMENTARIAS))
     mejor = limpia_texto(mejor)
     return ("…" if len(mejor) < len(texto) else "") + mejor[:620] + ("…" if len(mejor) > 620 else "")
 
@@ -1560,82 +1996,263 @@ def origen_mencion_uaf(reg: dict[str, Any], es_uaf: bool) -> str:
         return "bajada"
     if MENCION_UAF_RE.search(reg.get("texto_enriquecido", "")):
         return "cuerpo"
-    if MENCION_UAF_RE.search(reg.get("evidencia_uaf", "")):
+    if reg.get("verificacion_manual") and MENCION_UAF_RE.search(reg.get("evidencia_uaf", "")):
         return "verificacion_manual"
     return "texto"
+
+
+def evalua_pertinencia(reg: dict[str, Any]) -> dict[str, Any]:
+    uaf, confianza, motivos, puntaje, menciones = analiza_uaf(reg)
+    if uaf:
+        return {"valido": True, "tipo": "uaf_directa", "confianza": confianza, "puntaje": puntaje, "evidencia": extrae_contexto_uaf(reg), "motivos": motivos, "menciones_uaf": menciones}
+    laft = evalua_contexto_laft(reg)
+    if laft.get("valido"):
+        return {"valido": True, "tipo": "contexto_laft", "confianza": laft.get("confianza"), "puntaje": laft.get("puntaje"), "evidencia": laft.get("evidencia", ""), "motivos": laft.get("motivos", []), "menciones_uaf": menciones}
+    motivos_finales = list(motivos) + list(laft.get("motivos", []))
+    return {"valido": False, "tipo": "descartado", "confianza": "baja", "puntaje": max(puntaje, int(laft.get("puntaje", 0))), "evidencia": laft.get("evidencia", ""), "motivos": motivos_finales[:12], "menciones_uaf": menciones}
 
 
 def es_pertinente(reg: dict[str, Any]) -> bool:
     if dominio_url(reg.get("link", "")) in DOMINIOS_EXCLUIDOS_PUBLICACION:
         return False
-    if reg.get("verificacion_manual"):
-        return True
-    uaf = analiza_uaf(reg)[0]
-    if uaf:
-        return True
-    texto = normaliza(texto_registro(reg))
-    hits_laft = sum(1 for s in SENALES_LAFT if normaliza(s) in texto)
-    hits_crimen = sum(1 for s in SENALES_TEMATICAS if normaliza(s) in texto)
-    return hits_laft >= 1 and hits_crimen >= 2
+    return bool(evalua_pertinencia(reg).get("valido"))
+
+
+# ---------------------------------------------------------------------------
+# Clasificación contextual profunda
+# ---------------------------------------------------------------------------
+
+RE_EXTORSION = re.compile(r"\b(?:extorsi[oó]n(?:es)?|extorsion(?:ar|ado|ada|ados|adas|an|aron|ó)|chantaje(?:s)?|chantajear)\b", re.I)
+RE_SECUESTRO = re.compile(r"\b(?:secuestro(?:s)?|secuestr(?:ar|ado|ada|ados|adas|an|aron|ó)|rapto(?:s)?|privaci[oó]n\s+de\s+libertad)\b", re.I)
+RE_NEGACION_EXT_SEC = re.compile(r"\b(?:descart(?:a|ó|aron)|niega|neg[oó]|no\s+(?:hubo|fue|se\s+trat[oó]\s+de)|falso|simulad[oa])\b.{0,90}(?:extorsi[oó]n|secuestro)|(?:extorsi[oó]n|secuestro).{0,90}\b(?:descartad[oa]|fals[oa]|simulad[oa])\b", re.I)
+RE_SECUESTRO_NO_PERSONA = re.compile(r"\bsecuestro\s+(?:de\s+)?(?:datos|informaci[oó]n|archivos|sistemas?|cuentas?|bienes|activos|fondos|documentos?|veh[ií]culos?|mercader[ií]a|carga|servidores?|equipos?|dominio|p[aá]gina|señal|señales|ransomware)\b|\b(?:ransomware|secuestro\s+digital|secuestro\s+inform[aá]tico)\b", re.I)
+RE_NEGACION_GENERICA = re.compile(r"\b(?:descart(?:a|ó|aron)|no\s+(?:hubo|existe|se\s+configura|se\s+acreditó|se\s+acredito)|niega|negó|nego)\b", re.I)
+APOYO_EXTORSION = ["amenaza", "amenazas", "intimidación", "intimidacion", "cobro", "cobros", "pago", "pagos", "cuota", "cuotas", "protección", "proteccion", "rescate", "exigió", "exigio", "exigencia", "víctima", "victima"]
+APOYO_SECUESTRO = ["víctima", "victima", "persona", "empresario", "comerciante", "menor", "cautiverio", "rescate", "captores", "retenido", "retenida", "encerrado", "encerrada", "liberado", "liberada", "privado de libertad", "privada de libertad", "familia", "familiares"]
+
+PRECEDENTES_REGLAS = {
+    "corrupcion": ["corrupción", "corrupcion", "cohecho", "malversación", "malversacion", "soborno"],
+    "narcotrafico": ["narcotráfico", "narcotrafico", "tráfico de drogas", "trafico de drogas"],
+    "contrabando": ["contrabando"],
+    "fraude": ["fraude", "estafa", "defraudación", "defraudacion"],
+    "delitos_economicos": ["delitos económicos", "delitos economicos", "ley 21.595", "administración desleal", "administracion desleal"],
+    "trata": ["trata de personas", "explotación sexual", "explotacion sexual"],
+    "tributarios": ["delito tributario", "delitos tributarios", "evasión tributaria", "evasion tributaria", "facturas falsas"],
+}
+
+FENOMENO_REGLAS = {
+    "sartor": {"directos": ["sartor"], "apoyo": []},
+    "tren_de_aragua": {"directos": ["tren de aragua"], "apoyo": []},
+    "trata": {"directos": ["trata de personas", "explotación sexual", "explotacion sexual"], "apoyo": ["víctima", "victima", "red criminal"]},
+    "contrabando": {"directos": ["contrabando", "comercio ilícito", "comercio ilicito"], "apoyo": ["aduanas", "exportación", "exportacion", "importación", "importacion", "mercancía", "mercancia", "frontera"]},
+    "crimen_organizado": {"directos": ["crimen organizado", "organización criminal", "organizacion criminal"], "apoyo": ["banda criminal", "estructura criminal"]},
+    "corrupcion": {"directos": ["corrupción", "corrupcion", "cohecho", "soborno", "malversación", "malversacion"], "apoyo": ["funcionario público", "funcionario publico"]},
+    "narcotrafico": {"directos": ["narcotráfico", "narcotrafico", "tráfico de drogas", "trafico de drogas"], "apoyo": ["droga", "cocaína", "cocaina", "marihuana"]},
+    "fraude": {"directos": ["fraude", "estafa", "defraudación", "defraudacion"], "apoyo": ["engaño", "engano", "víctima", "victima"]},
+    "apuestas": {"directos": ["apuestas online", "apuestas en línea", "apuestas en linea", "juego ilegal"], "apoyo": ["plataforma", "casino"]},
+    "cibercrimen": {"directos": ["cibercrimen", "fraude informático", "fraude informatico", "ransomware", "phishing", "delito informático", "delito informatico"], "apoyo": ["criptomoneda", "criptoactivo", "billetera digital", "hackeo"]},
+}
+
+TOPICOS_REGLAS = {
+    "prevencion": {"directos": ["prevención de lavado", "prevencion de lavado", "debida diligencia", "cumplimiento antilavado", "compliance", "gestión de riesgos", "gestion de riesgos"], "apoyo": ["lavado de activos", "uaf", "sujeto obligado"]},
+    "investigacion_penal": {"directos": ["formalización", "formalizacion", "imputado", "imputada", "investigación penal", "investigacion penal", "persecución penal", "persecucion penal"], "apoyo": ["fiscalía", "fiscalia", "ministerio público", "ministerio publico", "tribunal"]},
+    "regulacion": {"directos": ["proyecto de ley", "circular", "normativa", "regulación", "regulacion", "reforma legal"], "apoyo": ["uaf", "lavado de activos", "sujeto obligado"]},
+    "inteligencia_financiera": {"directos": ["inteligencia financiera", "ruta del dinero", "análisis financiero", "analisis financiero"], "apoyo": ["uaf", "operaciones sospechosas", "reportes"]},
+    "crimen_organizado": {"directos": ["crimen organizado", "organización criminal", "organizacion criminal", "tren de aragua"], "apoyo": ["lavado de activos"]},
+    "fiscalizacion": {"directos": ["fiscalización", "fiscalizacion", "multa", "procedimiento sancionatorio", "sanción administrativa", "sancion administrativa"], "apoyo": ["uaf", "sujeto obligado", "superintendencia"]},
+    "cooperacion": {"directos": ["gafilat", "gafi", "milaft", "cooperación internacional", "cooperacion internacional"], "apoyo": ["uaf", "lavado de activos"]},
+    "tecnologia": {"directos": ["transformación digital", "transformacion digital", "tecnología financiera", "tecnologia financiera", "inteligencia artificial", "cibercrimen", "criptoactivo"], "apoyo": ["uaf", "lavado de activos"]},
+    "sujetos_obligados": {"directos": ["sujeto obligado", "sujetos obligados", "entidad reportante", "entidades reportantes", "reporte de operaciones sospechosas"], "apoyo": ["uaf"]},
+}
+
+SUJETOS_REGLAS = {
+    "bancos": ["banco", "bancos", "banca", "entidad bancaria", "entidades bancarias"],
+    "fintech": ["fintech", "mercado pago", "billetera digital", "billeteras digitales"],
+    "casinos": ["casino de juego", "casinos de juego", "casino"],
+    "notarios": ["notario", "notaria", "notaría", "conservador de bienes raíces", "conservador de bienes raices"],
+    "inmobiliarias": ["inmobiliaria", "inmobiliarias", "corredor de propiedades", "bienes raíces", "bienes raices"],
+    "automotoras": ["automotora", "automotoras", "compraventa de vehículos", "compraventa de vehiculos", "vehículo de lujo", "vehiculo de lujo"],
+    "valores": ["corredora de bolsa", "administradora general de fondos", "administradoras generales de fondos", "agf", "mercado de valores"],
+    "remesadoras": ["remesadora", "remesadoras", "casa de cambio", "casas de cambio", "transferencia de dinero"],
+    "contadores": ["contador", "contadores", "auditor externo", "auditores externos"],
+    "abogados": ["abogado", "abogados", "estudio jurídico", "estudio juridico"],
+    "sector_publico": ["servicio público", "servicio publico", "municipalidad", "municipalidades", "empresa pública", "empresa publica"],
+}
+
+PESOS_ORIGEN = {"titulo": 7, "bajada": 6, "contexto_uaf": 5, "contexto_laft": 5, "inicio_cuerpo": 3, "cuerpo_relevante": 2}
+
+
+def _evalua_regla(fragmentos: list[tuple[str, str]], directos: list[str], apoyo: list[str] | None = None, *, exige_apoyo_cuerpo: bool = False, requiere_apoyo: bool = False, permite_lista: bool = False) -> dict[str, Any]:
+    apoyo = apoyo or []
+    mejor = {"valido": False, "puntaje": 0, "confianza": "sin señal", "evidencia": "", "origen": "", "motivos": []}
+    ocurrencias = 0
+    descartes: list[str] = []
+    for origen, frag in fragmentos:
+        hits = cuenta_frases(frag, directos)
+        if not hits:
+            continue
+        ocurrencias += hits
+        score = PESOS_ORIGEN.get(origen, 1) + min(5, hits*2)
+        motivos = [f"mención en {origen}"]
+        tiene_apoyo = contiene_frase(frag, apoyo) if apoyo else False
+        if tiene_apoyo:
+            score += 2; motivos.append("contexto de apoyo")
+        if _es_lista_generica(frag) and not permite_lista:
+            score -= 6; motivos.append("enumeración genérica")
+        if RE_NEGACION_GENERICA.search(frag) and origen not in {"titulo", "bajada"}:
+            score -= 4; motivos.append("hipótesis negada o descartada")
+        central = origen in {"titulo", "bajada", "contexto_uaf", "contexto_laft"}
+        valido = score >= 8 and (central or ocurrencias >= 2 or (tiene_apoyo and not exige_apoyo_cuerpo))
+        if exige_apoyo_cuerpo and origen not in {"titulo", "bajada"} and not tiene_apoyo:
+            valido = False
+        if requiere_apoyo and not tiene_apoyo:
+            valido = False
+        cand = {"valido": valido, "puntaje": score, "confianza": "alta" if score >= 12 else "media" if valido else "baja", "evidencia": frag[:550], "origen": origen, "motivos": motivos}
+        if cand["puntaje"] > mejor["puntaje"]:
+            mejor = cand
+        if not valido:
+            descartes.append(f"{origen}: {frag[:240]}")
+    if not mejor["valido"] and ocurrencias >= 2 and mejor["puntaje"] >= 6:
+        mejor["valido"] = True; mejor["confianza"] = "media"; mejor["motivos"].append("mención repetida en fragmentos relevantes")
+    mejor["descartados"] = descartes[:5]
+    return mejor
+
+
+def _evalua_extorsion_secuestro(fragmentos: list[tuple[str, str]]) -> dict[str, Any]:
+    mejor = {"valido": False, "puntaje": 0, "confianza": "sin señal", "evidencia": "", "origen": "", "motivos": []}
+    descartes: list[str] = []
+    for origen, frag in fragmentos:
+        fn = normaliza(frag)
+        hay_ext = bool(RE_EXTORSION.search(frag)); hay_sec = bool(RE_SECUESTRO.search(frag))
+        if not (hay_ext or hay_sec):
+            continue
+        score = PESOS_ORIGEN.get(origen, 1); motivos=[]
+        if RE_NEGACION_EXT_SEC.search(frag):
+            descartes.append(f"negación: {frag[:240]}"); continue
+        if hay_sec and RE_SECUESTRO_NO_PERSONA.search(frag) and not contiene_frase(fn, APOYO_SECUESTRO):
+            descartes.append(f"uso no personal: {frag[:240]}"); continue
+        if _es_lista_generica(frag):
+            score -= 6; motivos.append("enumeración genérica")
+        apoyo_ext = hay_ext and contiene_frase(fn, APOYO_EXTORSION)
+        apoyo_sec = hay_sec and contiene_frase(fn, APOYO_SECUESTRO)
+        if apoyo_ext: score += 4; motivos.append("amenaza, cobro o exigencia")
+        if apoyo_sec: score += 4; motivos.append("víctima o privación de libertad")
+        if hay_ext and hay_sec: score += 2
+        central = origen in {"titulo", "bajada"}
+        valido = score >= 8 and (central or apoyo_ext or apoyo_sec)
+        cand={"valido":valido,"puntaje":score,"confianza":"alta" if score>=12 else "media" if valido else "baja","evidencia":frag[:550],"origen":origen,"motivos":motivos}
+        if cand["puntaje"]>mejor["puntaje"]: mejor=cand
+    mejor["descartados"]=descartes[:5]
+    return mejor
+
+
+def clasifica_precedentes(reg: dict[str, Any]) -> tuple[list[str], dict[str, str], dict[str, str], list[str]]:
+    fragmentos = _fragmentos_editoriales(reg)
+    encontrados=[]; evidencia={}; confianza={}; descartados=[]
+    ext=_evalua_extorsion_secuestro(fragmentos)
+    if ext["valido"]:
+        encontrados.append("extorsion_secuestro"); evidencia["extorsion_secuestro"]=ext["evidencia"]; confianza["extorsion_secuestro"]=ext["confianza"]
+    else: descartados.extend(ext.get("descartados",[]))
+    for clave, terminos in PRECEDENTES_REGLAS.items():
+        ev=_evalua_regla(fragmentos, terminos, ANCLAS_PENALES+ANCLAS_FINANCIERAS)
+        if ev["valido"]:
+            encontrados.append(clave); evidencia[clave]=ev["evidencia"]; confianza[clave]=ev["confianza"]
+        else:
+            descartados.extend(f"{clave}: {x}" for x in ev.get("descartados",[])[:2])
+    if not encontrados:
+        encontrados=["indeterminado"]; confianza["indeterminado"]="sin evidencia suficiente"
+    return encontrados,evidencia,confianza,descartados[:15]
+
+
+def clasifica_fenomeno(reg: dict[str, Any]) -> tuple[str, str, str, list[str]]:
+    fragmentos=_fragmentos_editoriales(reg)
+    candidatos=[]; descartados=[]
+    for clave, regla in FENOMENO_REGLAS.items():
+        exige = clave in {"cibercrimen"}
+        ev=_evalua_regla(fragmentos, regla["directos"], regla.get("apoyo",[]), exige_apoyo_cuerpo=exige)
+        if ev["valido"]: candidatos.append((ev["puntaje"],clave,ev))
+        elif ev.get("evidencia"): descartados.append(f"{clave}: {ev['evidencia'][:220]}")
+    if not candidatos: return "otro","","sin evidencia suficiente",descartados[:8]
+    _,clave,ev=max(candidatos,key=lambda x:(x[0], x[1] in {"sartor","tren_de_aragua"}))
+    return clave,ev["evidencia"],ev["confianza"],descartados[:8]
+
+
+def clasifica_topicos(reg: dict[str, Any]) -> tuple[list[str], dict[str,str], dict[str,str], list[str]]:
+    fragmentos=_fragmentos_editoriales(reg)
+    encontrados=[]; evidencia={}; confianza={}; descartados=[]
+    for clave, regla in TOPICOS_REGLAS.items():
+        ev=_evalua_regla(fragmentos, regla["directos"], regla.get("apoyo",[]), exige_apoyo_cuerpo=True)
+        if ev["valido"]:
+            encontrados.append(clave); evidencia[clave]=ev["evidencia"]; confianza[clave]=ev["confianza"]
+        elif ev.get("evidencia"): descartados.append(f"{clave}: {ev['evidencia'][:220]}")
+    return encontrados or ["otros"], evidencia, confianza, descartados[:12]
+
+
+def clasifica_sujetos(reg: dict[str, Any]) -> tuple[list[str], dict[str,str], dict[str,str], list[str]]:
+    fragmentos=_fragmentos_editoriales(reg)
+    encontrados=[]; evidencia={}; confianza={}; descartados=[]
+    for clave, terminos in SUJETOS_REGLAS.items():
+        ev=_evalua_regla(fragmentos, terminos, UAF_ACCIONES+LAFT_FRASES_FUERTES+["operaciones sospechosas","sujeto obligado","sujetos obligados","fiscalización","fiscalizacion","cumplimiento antilavado","debida diligencia"], exige_apoyo_cuerpo=True, requiere_apoyo=True)
+        if ev["valido"]:
+            encontrados.append(clave); evidencia[clave]=ev["evidencia"]; confianza[clave]=ev["confianza"]
+        elif ev.get("evidencia"): descartados.append(f"{clave}: {ev['evidencia'][:220]}")
+    return encontrados,evidencia,confianza,descartados[:12]
 
 
 def clasifica_naturaleza(reg: dict[str, Any], texto: str) -> str:
     url = normaliza(reg.get("link", ""))
-    combinado = texto + " " + url
-    for clave in ("opinion", "institucional", "legislativo", "regulatorio", "judicial", "policial", "analisis"):
-        if contiene(combinado, NATURALEZAS[clave]):
-            return clave
+    cabecera = " ".join([reg.get("titulo", ""),reg.get("resumen","")])
+    fuente = fuente_para_host(dominio_url(reg.get("link", ""))) or {}
+    if any(x in url for x in ("/opinion/","/columnista","/editorial/","/cartas")) or contiene_frase(cabecera,["columna","carta al director","editorial"]): return "opinion"
+    if fuente.get("oficial") and contiene_frase(cabecera,["cuenta pública","cuenta publica","participación","participacion","jornada","seminario","simposio"]): return "institucional"
+    if contiene_frase(cabecera,["proyecto de ley","senador","senadora","diputado","diputada","comisión","comision","boletín","boletin"]): return "legislativo"
+    if contiene_frase(cabecera,["circular","normativa","regulación","regulacion","procedimiento sancionatorio","fiscalización","fiscalizacion"]): return "regulatorio"
+    if contiene_frase(cabecera,["formalización","formalizacion","imputado","imputada","querella","condena","tribunal","fiscalía","fiscalia"]): return "judicial"
+    if contiene_frase(cabecera,["detenido","detenida","allanamiento","incautación","incautacion","operativo","pdi","carabineros"]): return "policial"
     return "analisis"
 
 
 def clasifica(reg: dict[str, Any]) -> dict[str, Any]:
     texto = normaliza(texto_registro(reg))
-    uaf, confianza, motivos, puntaje, menciones = analiza_uaf(reg)
-    fenomeno = next((k for k, v in FENOMENOS.items() if contiene(texto, v)), "otro")
+    pertinencia = evalua_pertinencia(reg)
+    uaf = pertinencia["tipo"] == "uaf_directa"
+    # Conserva el detalle propio del evaluador UAF para correo y auditoría.
+    uaf_val, uaf_confianza, uaf_motivos, uaf_puntaje, uaf_menciones = analiza_uaf(reg)
+    fenomeno, fen_ev, fen_conf, fen_desc = clasifica_fenomeno(reg)
     naturaleza = clasifica_naturaleza(reg, texto)
-    precedentes = [k for k, v in PRECEDENTES.items() if contiene(texto, v)] or ["indeterminado"]
-    topicos = [k for k, v in TOPICOS.items() if contiene(texto, v)] or ["otros"]
-    sujetos = [k for k, v in SUJETOS.items() if contiene(texto, v)]
-    if sujetos and "sujetos_obligados" not in topicos:
+    precedentes, prec_ev, prec_conf, prec_desc = clasifica_precedentes(reg)
+    topicos, top_ev, top_conf, top_desc = clasifica_topicos(reg)
+    sujetos, subj_ev, subj_conf, subj_desc = clasifica_sujetos(reg)
+    if sujetos and "sujetos_obligados" not in topicos and contiene_frase(pertinencia.get("evidencia",""),["sujeto obligado","reporte de operaciones sospechosas"]):
         topicos.append("sujetos_obligados")
-    impactos: list[str] = []
-    if sujetos:
-        if contiene(texto, ["fiscalizacion", "circular", "regulacion", "obligacion", "sancion"]):
-            impactos.append("regulacion_supervision")
-        if contiene(texto, ["lavado", "utilizado", "canalizo", "testaferro", "cuenta puente"]):
-            impactos.append("vulneracion_la")
-        if contiene(texto, ["cumplimiento", "debida diligencia", "prevencion"]):
-            impactos.append("cumplimiento_preventivo")
-    fuente = fuente_para_host(dominio_url(reg.get("link", ""))) or {}
-    roles = {s: ("regulado" if "regulacion_supervision" in impactos else "vulnerado" if "vulneracion_la" in impactos else "mencionado") for s in sujetos}
+    impactos=[]
+    for s in sujetos:
+        ev=subj_ev.get(s,"")
+        if contiene_frase(ev,["fiscalización","fiscalizacion","circular","regulación","regulacion","obligación","obligacion","multa","sanción","sancion"]): impactos.append("regulacion_supervision")
+        if contiene_frase(ev,["lavado de activos","testaferro","cuenta puente","canalizó fondos","canalizo fondos"]): impactos.append("vulneracion_la")
+        if contiene_frase(ev,["cumplimiento","debida diligencia","prevención","prevencion"]): impactos.append("cumplimiento_preventivo")
+    impactos=list(dict.fromkeys(impactos))
+    fuente=fuente_para_host(dominio_url(reg.get("link",""))) or {}
+    roles={s:("regulado" if "regulacion_supervision" in impactos else "vulnerado" if "vulneracion_la" in impactos else "mencionado") for s in sujetos}
+    descartadas={"fenomenos":fen_desc,"precedentes":prec_desc,"topicos":top_desc,"sujetos":subj_desc}
     reg.update({
-        "fenomeno": fenomeno,
-        "fenomeno_label": LABELS["fenomeno"].get(fenomeno, fenomeno),
-        "naturaleza": naturaleza,
-        "naturaleza_label": LABELS["naturaleza"].get(naturaleza, naturaleza),
-        "precedentes": precedentes,
-        "precedentes_label": [LABELS["precedentes"].get(x, x) for x in precedentes],
-        "topicos": topicos,
-        "topicos_label": [LABELS["topicos"].get(x, x) for x in topicos],
-        "sujetos_obligados": sujetos,
-        "sujetos_obligados_label": [LABELS["sujetos"].get(x, x) for x in sujetos],
-        "impactos_sujeto": impactos,
-        "impactos_sujeto_label": [{"regulacion_supervision": "Regulación o supervisión", "vulneracion_la": "Vulneración para LA", "cumplimiento_preventivo": "Cumplimiento preventivo"}.get(x, x) for x in impactos],
-        "roles_sujetos": roles,
-        "roles_sujetos_label": {k: v.capitalize() for k, v in roles.items()},
-        "tipo_medio": fuente.get("tipo", reg.get("tipo_fuente", "otro")),
-        "uaf": uaf,
-        "uaf_chile": uaf,
-        "uaf_confianza": confianza,
-        "uaf_motivos": motivos,
-        "uaf_puntaje": puntaje,
-        "uaf_menciones": menciones,
-        "origen_mencion_uaf": origen_mencion_uaf(reg, uaf),
-        "contexto_uaf": extrae_contexto_uaf(reg) if uaf else "",
-        "nucleo": uaf or contiene(texto, SENALES_LAFT),
-        "fuente_institucional": bool(fuente.get("oficial", reg.get("fuente_institucional"))),
-        "nivel_fuente": "institucional" if fuente.get("oficial") else "catalogada",
-        "nivel_fuente_label": "Fuente institucional" if fuente.get("oficial") else "Medio catalogado",
+        "pertinente": bool(pertinencia.get("valido")), "tipo_cobertura": pertinencia.get("tipo"),
+        "pertinencia_confianza": pertinencia.get("confianza"), "pertinencia_puntaje": pertinencia.get("puntaje",0),
+        "pertinencia_evidencia": pertinencia.get("evidencia",""), "pertinencia_motivos": pertinencia.get("motivos",[]),
+        "fenomeno":fenomeno,"fenomeno_label":LABELS["fenomeno"].get(fenomeno,fenomeno),"fenomeno_evidencia":fen_ev,"fenomeno_confianza":fen_conf,"fenomenos_descartados":fen_desc,
+        "naturaleza":naturaleza,"naturaleza_label":LABELS["naturaleza"].get(naturaleza,naturaleza),
+        "precedentes":precedentes,"precedentes_label":[LABELS["precedentes"].get(x,x) for x in precedentes],"precedentes_evidencia":prec_ev,"precedentes_confianza":prec_conf,"precedentes_descartados":prec_desc,
+        "topicos":topicos,"topicos_label":[LABELS["topicos"].get(x,x) for x in topicos],"topicos_evidencia":top_ev,"topicos_confianza":top_conf,"topicos_descartados":top_desc,
+        "sujetos_obligados":sujetos,"sujetos_obligados_label":[LABELS["sujetos"].get(x,x) for x in sujetos],"sujetos_evidencia":subj_ev,"sujetos_confianza":subj_conf,"sujetos_descartados":subj_desc,
+        "impactos_sujeto":impactos,"impactos_sujeto_label":[{"regulacion_supervision":"Regulación o supervisión","vulneracion_la":"Vulneración para LA","cumplimiento_preventivo":"Cumplimiento preventivo"}.get(x,x) for x in impactos],
+        "roles_sujetos":roles,"roles_sujetos_label":{k:v.capitalize() for k,v in roles.items()},
+        "clasificaciones_descartadas":descartadas,
+        "tipo_medio":fuente.get("tipo",reg.get("tipo_fuente","otro")),
+        "uaf":uaf_val,"uaf_chile":uaf_val,"uaf_confianza":uaf_confianza,"uaf_motivos":uaf_motivos,"uaf_puntaje":uaf_puntaje,"uaf_menciones":uaf_menciones,
+        "origen_mencion_uaf":origen_mencion_uaf(reg,uaf_val),"contexto_uaf":extrae_contexto_uaf(reg) if uaf_val else "",
+        "nucleo":bool(pertinencia.get("valido")),
+        "fuente_institucional":bool(fuente.get("oficial",reg.get("fuente_institucional"))),
+        "nivel_fuente":"institucional" if fuente.get("oficial") else "catalogada","nivel_fuente_label":"Fuente institucional" if fuente.get("oficial") else "Medio catalogado",
     })
     return reg
 
@@ -1643,6 +2260,42 @@ def clasifica(reg: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Estado, histórico y auditoría
 # ---------------------------------------------------------------------------
+
+_AUDITORIA_CALIDAD: dict[str, Any] = {}
+
+def reinicia_auditoria_calidad() -> None:
+    global _AUDITORIA_CALIDAD
+    _AUDITORIA_CALIDAD = {
+        "registros_eliminados": [], "cambios_fenomeno": [], "precedentes_retirados": [],
+        "topicos_retirados": [], "sujetos_retirados": [], "resumen": Counter(),
+    }
+
+def _muestra_auditoria(clave: str, dato: dict[str, Any], limite: int = 120) -> None:
+    lista = _AUDITORIA_CALIDAD.setdefault(clave, [])
+    if len(lista) < limite:
+        lista.append(dato)
+
+def audita_reclasificacion(antes: dict[str, Any], despues: dict[str, Any] | None, motivo: str = "") -> None:
+    titulo = antes.get("titulo", "")
+    base = {"titulo": titulo, "medio": antes.get("medio", ""), "link": antes.get("link", ""), "fecha": antes.get("fecha", "")}
+    resumen = _AUDITORIA_CALIDAD.setdefault("resumen", Counter())
+    if despues is None or not despues.get("pertinente"):
+        resumen["registros_eliminados"] += 1
+        _muestra_auditoria("registros_eliminados", {**base, "motivo": motivo or "sin pertinencia UAF/LAFT", "evidencia": (despues or {}).get("pertinencia_evidencia", "")})
+        return
+    if antes.get("fenomeno") and antes.get("fenomeno") != despues.get("fenomeno"):
+        resumen["cambios_fenomeno"] += 1
+        _muestra_auditoria("cambios_fenomeno", {**base, "antes": antes.get("fenomeno_label", antes.get("fenomeno")), "despues": despues.get("fenomeno_label", despues.get("fenomeno")), "evidencia": despues.get("fenomeno_evidencia", "")})
+    for campo, clave_audit in (("precedentes","precedentes_retirados"),("topicos","topicos_retirados"),("sujetos_obligados","sujetos_retirados")):
+        retirados = sorted(set(antes.get(campo,[]) or []) - set(despues.get(campo,[]) or []))
+        if retirados:
+            resumen[clave_audit] += len(retirados)
+            _muestra_auditoria(clave_audit, {**base, "retirados": retirados, "motivo": "sin evidencia contextual suficiente"})
+
+def auditoria_calidad_serializable() -> dict[str, Any]:
+    out = dict(_AUDITORIA_CALIDAD)
+    out["resumen"] = dict(out.get("resumen", {}))
+    return out
 
 
 def carga_json(ruta: Path, defecto: Any) -> Any:
@@ -1700,15 +2353,18 @@ def debe_revisar(c: dict[str, Any], estado: dict[str, Any], modo: str) -> bool:
 def razon_descarte(reg: dict[str, Any]) -> str:
     if dominio_url(reg.get("link", "")) in DOMINIOS_EXCLUIDOS_PUBLICACION:
         return "dominio_excluido"
+    if url_excluida_editorialmente(reg.get("link", "")):
+        return "falso_positivo_validado"
     estado = reg.get("estado_extraccion", "")
     if estado and estado != "completo" and not reg.get("titulo") and not reg.get("resumen"):
         return estado
     if reg.get("fecha_dt") and not dentro_ventana(reg["fecha_dt"]):
         return "fuera_de_ventana"
-    if not MENCION_UAF_RE.search(texto_registro(reg)) and not es_pertinente(reg):
-        return "sin_mencion_ni_contexto_laft"
-    if MENCION_UAF_RE.search(texto_registro(reg)) and not analiza_uaf(reg)[0]:
+    pertinencia = evalua_pertinencia(reg)
+    if not pertinencia.get("valido") and MENCION_UAF_RE.search(texto_registro(reg)):
         return "uaf_ambigua_o_extranjera"
+    if not pertinencia.get("valido"):
+        return "sin_relacion_sustantiva_uaf_laft"
     return "no_pertinente"
 
 
@@ -1759,9 +2415,21 @@ def calidad_registro(r: dict[str, Any]) -> int:
 def mezcla_historico(previos: list[dict[str, Any]], nuevos: list[dict[str, Any]]) -> list[dict[str, Any]]:
     corte_fecha = ahora_cl().date() - timedelta(days=max(0, VENTANA_DIAS - 1))
     por_id: dict[str, dict[str, Any]] = {}
-    for r in previos + nuevos:
-        if dominio_url(r.get("link", "")) in DOMINIOS_EXCLUIDOS_PUBLICACION:
+    for r_original in previos + nuevos:
+        antes = dict(r_original)
+        r = dict(r_original)
+        if dominio_url(r.get("link", "")) in DOMINIOS_EXCLUIDOS_PUBLICACION or url_excluida_editorialmente(r.get("link", "")):
+            audita_reclasificacion(antes, None, "dominio o URL excluida")
             continue
+        # Todas las publicaciones, incluidas las verificadas, reciben la taxonomía
+        # vigente. Las semillas mantienen aceptación UAF por su validación manual.
+        r = clasifica(r)
+        if not r.get("pertinente"):
+            audita_reclasificacion(antes, r, "sin relación sustantiva UAF/LAFT")
+            continue
+        if not INCLUIR_CONTEXTO_LAFT and not r.get("uaf"):
+            continue
+        audita_reclasificacion(antes, r)
         fecha_dt = parsea_fecha(r.get("fecha_hora") or r.get("fecha"))
         if fecha_dt and fecha_dt.date() < corte_fecha:
             continue
@@ -1924,6 +2592,7 @@ def ejecutar(modo: str) -> int:
     modo = modo.lower()
     if modo not in {"rapido", "conciliacion"}:
         raise ValueError("modo debe ser rapido o conciliacion")
+    reinicia_auditoria_calidad()
     estado = carga_estado()
     migracion = bool(estado.pop("migracion_pendiente", False))
     previos = carga_previos()
@@ -1973,14 +2642,15 @@ def ejecutar(modo: str) -> int:
     revisado_iso = ahora_cl().isoformat()
     for r in enriquecidos:
         rid = id_registro(r.get("link", ""), r.get("titulo", ""))
-        uaf = analiza_uaf(r)[0]
-        pertinente = es_pertinente(r)
-        if pertinente and (uaf or not SOLO_MENCIONES_UAF_DASHBOARD):
+        pertinencia = evalua_pertinencia(r)
+        uaf = pertinencia.get("tipo") == "uaf_directa"
+        pertinente = bool(pertinencia.get("valido"))
+        if pertinente and (uaf or INCLUIR_CONTEXTO_LAFT):
             pub = registro_publicable(r, modo)
             aceptados.append(pub)
             estado_val = "aceptado_uaf" if pub.get("uaf") else "aceptado_contexto"
         elif pertinente:
-            motivo = "contexto_laft_sin_mencion_uaf"
+            motivo = "contexto_laft_oculto_por_configuracion"
             estado_val = motivo
             descartes[motivo] += 1
             muestra = candidato_pendiente(r, motivo)
@@ -2045,6 +2715,7 @@ def ejecutar(modo: str) -> int:
         "consultas": len(CONSULTAS_UAF) + len(CONSULTAS_CONTEXTO) + len(consultas_site(modo)),
         "candidatos_pendientes": pendientes_final,
         "descartes_resumen": dict(descartes), "muestras_descartes": muestras_descartes,
+        "auditoria_calidad": auditoria_calidad_serializable(),
         "cobertura_fuentes": cobertura_fuentes,
         "auditoria": {
             "modo": modo, "urls_descubiertas": len(descubiertos), "urls_unicas": len(candidatos),
@@ -2056,7 +2727,11 @@ def ejecutar(modo: str) -> int:
             "ultima_conciliacion": estado.get("ultima_conciliacion"), "migracion_estado": migracion,
             "semillas_verificadas_activas": len(semillas),
             "dashboard_solo_menciones_uaf": SOLO_MENCIONES_UAF_DASHBOARD,
+            "incluye_contexto_laft": INCLUIR_CONTEXTO_LAFT,
             "dominios_excluidos": sorted(DOMINIOS_EXCLUIDOS_PUBLICACION),
+            "urls_excluidas_editorialmente": len(carga_exclusiones_editoriales()),
+            "extorsion_secuestro_confirmadas": sum(1 for r in prensa if "extorsion_secuestro" in r.get("precedentes", [])),
+            "menciones_extorsion_secuestro_descartadas": sum(1 for r in prensa if any("secuestro" in x or "extors" in x for x in r.get("precedentes_descartados", []))),
         },
         "cobertura_tecnica": {
             "cuerpos_extraidos": sum(1 for r in prensa if r.get("cuerpo_extraido")),
@@ -2069,6 +2744,14 @@ def ejecutar(modo: str) -> int:
             "retencion_procesados_dias": RETENCION_PROCESADOS_DIAS,
             "semillas_verificadas": len(semillas),
             "excluye_uaf_cl": True,
+            "delimitacion_editorial": True,
+            "reclasifica_historico": True,
+            "clasificacion_contextual_delitos": True,
+            "clasificacion_contextual_integral": True,
+            "coincidencia_lexica_estricta": True,
+            "incluye_contexto_laft": INCLUIR_CONTEXTO_LAFT,
+            "umbral_extorsion_secuestro": "mención central o término + apoyo contextual",
+            "urls_excluidas_editorialmente": len(carga_exclusiones_editoriales()),
             "segundos_corrida": round(time.monotonic() - INICIO, 1),
         },
     }
@@ -2123,7 +2806,7 @@ def evalua_url(url: str) -> dict[str, Any]:
         "cuerpo_extraido": r.get("cuerpo_extraido"), "estado_extraccion": r.get("estado_extraccion"),
         "fecha": r.get("fecha_dt").isoformat() if r.get("fecha_dt") else None,
         "uaf_chile": uaf, "confianza": confianza, "puntaje": puntaje, "menciones": menciones,
-        "motivos": motivos, "pertinente": es_pertinente(r), "contexto": extrae_contexto_uaf(r),
+        "motivos": motivos, "pertinencia": evalua_pertinencia(r), "pertinente": es_pertinente(r), "contexto": extrae_contexto_uaf(r),
         "error": r.get("error_enriquecimiento"),
     }
 
@@ -2158,7 +2841,7 @@ def probar_deteccion(texto: str, medio: str = "Medio chileno", link: str = "http
     reg = {"titulo": texto[:200], "resumen": "", "texto_enriquecido": texto, "medio": medio, "link": link}
     uaf, confianza, motivos, puntaje, menciones = analiza_uaf(reg)
     print(json.dumps({"uaf_chile": uaf, "confianza": confianza, "puntaje": puntaje,
-                      "menciones": menciones, "motivos": motivos, "pertinente": es_pertinente(reg),
+                      "menciones": menciones, "motivos": motivos, "pertinencia": evalua_pertinencia(reg), "pertinente": es_pertinente(reg),
                       "contexto": extrae_contexto_uaf(reg)}, ensure_ascii=False, indent=2, default=json_default))
 
 

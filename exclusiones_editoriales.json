@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "descripcion": "URLs verificadas como falsos positivos. Se excluyen del dashboard y del correo.",
+  "exclusiones": [
+    {
+      "link": "https://www.eldinamo.cl/sociedad/2026/07/29/tras-muerte-de-tripulante-extranjero-los-virus-que-pueden-causar-la-fiebre-hemorragica/",
+      "motivo": "El artículo trata sobre fiebre hemorrágica y no menciona a la UAF; la detección provino de contenido recomendado ajeno.",
+      "fecha_validacion": "2026-07-30"
+    }
+  ]
+}

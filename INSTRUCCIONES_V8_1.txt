@@ -1,0 +1,53 @@
+MONITOR UAF CHILE v8.1 — CALIDAD PROFUNDA
+
+ARCHIVOS OBLIGATORIOS
+1. Reemplaza en la raíz del repositorio:
+   - monitor_uaf.py
+   - index.html
+   - auditoria.html
+
+2. Confirma que ya exista en la raíz:
+   - exclusiones_editoriales.json
+   Si no existe, sube también el archivo incluido.
+
+ARCHIVOS OPCIONALES DE PRUEBA
+- test_control_editorial.py
+- test_delitos_contextuales.py
+- test_calidad_profunda.py
+- CAMBIOS_V8_1.md
+
+NO MODIFICAR
+- datos.json
+- semillas_verificadas.json
+- fuentes_uaf.json
+- construye_sitio.py
+- los workflows
+- los secrets de correo
+
+EJECUCIÓN RECOMENDADA
+Actions > Actualizar y publicar monitor UAF > Run workflow
+- modo: conciliacion
+- reiniciar_estado: false
+- probar_correo: false
+
+La migración del esquema reclasifica el histórico de 30 días. No borres datos.json ni reinicies el estado.
+
+VALIDACIÓN
+En datos.json debe aparecer:
+  "version_motor": "8.1-calidad-profunda"
+
+En auditoria.html revisa la sección “Correcciones de calidad”. Allí se mostrará el número exacto y los ejemplos de publicaciones o categorías retiradas del histórico real.
+
+PRUEBAS LOCALES OPCIONALES
+python test_control_editorial.py
+python test_delitos_contextuales.py
+python test_calidad_profunda.py
+
+RESULTADO ESPERADO
+- 5 pruebas editoriales aprobadas
+- 6 pruebas de extorsión/secuestro aprobadas
+- 18 pruebas de calidad profunda aprobadas
+- 29 pruebas en total
+
+DESPUÉS DE PUBLICAR
+Actualiza GitHub Pages con Ctrl + F5.
