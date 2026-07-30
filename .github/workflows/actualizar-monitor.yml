@@ -1,20 +1,34 @@
-name: Actualizar y publicar monitor
+name: Actualizar y publicar monitor UAF
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Monitoreo rápido cada 15 minutos.
+    - cron: "7,22,37,52 * * * *"
+    # Conciliación histórica diaria. 07:13 UTC equivale aproximadamente
+    # a 03:13 en Chile durante horario de invierno.
+    - cron: "13 7 * * *"
   workflow_dispatch:
     inputs:
+      modo:
+        description: "Tipo de ejecución"
+        type: choice
+        required: true
+        default: rapido
+        options:
+          - rapido
+          - conciliacion
       reiniciar_estado:
         description: "Ignorar el histórico guardado y partir de cero"
         type: boolean
         default: false
+      probar_correo:
+        description: "Enviar solo un correo de prueba"
+        type: boolean
+        default: false
 
-# Permisos mínimos por trabajo (principio de menor privilegio).
 permissions:
   contents: read
 
-# Una sola corrida a la vez: evita que dos actualizaciones se pisen el estado.
 concurrency:
   group: monitor-uaf
   cancel-in-progress: false
@@ -22,44 +36,91 @@ concurrency:
 jobs:
   actualizar:
     runs-on: ubuntu-latest
-    timeout-minutes: 22
+    timeout-minutes: 58
     permissions:
-      contents: write   # solo para escribir la rama monitor-state
+      contents: write
     steps:
-      - name: Descargar el repositorio
-        uses: actions/checkout@v4
+      - name: Descargar repositorio
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Preparar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Restaurar histórico desde la rama monitor-state
-        if: ${{ inputs.reiniciar_estado != true }}
+      - name: Determinar modo y presupuesto
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            MODO="${{ inputs.modo }}"
+          elif [[ "${{ github.event.schedule }}" == "13 7 * * *" ]]; then
+            MODO="conciliacion"
+          else
+            MODO="rapido"
+          fi
+          echo "MODO=$MODO" >> "$GITHUB_ENV"
+          if [[ "$MODO" == "conciliacion" ]]; then
+            echo "MONITOR_PRESUPUESTO_SEG=3000" >> "$GITHUB_ENV"
+            echo "MONITOR_HILOS=8" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_ENRIQUECER=1100" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_ENRIQUECER_CONCILIACION=1100" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_SITE_QUERIES=140" >> "$GITHUB_ENV"
+            echo "MONITOR_BARRIDO_MIN_FUENTE=6" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_SITEMAPS_FUENTE=12" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_URLS_SITEMAP=650" >> "$GITHUB_ENV"
+          else
+            echo "MONITOR_PRESUPUESTO_SEG=780" >> "$GITHUB_ENV"
+            echo "MONITOR_HILOS=8" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_ENRIQUECER=280" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_SITE_QUERIES=48" >> "$GITHUB_ENV"
+            echo "MONITOR_BARRIDO_MIN_FUENTE=2" >> "$GITHUB_ENV"
+            echo "MONITOR_FUENTES_ROTACION=14" >> "$GITHUB_ENV"
+          fi
+          echo "MONITOR_DIAS_PROCESADOS=45" >> "$GITHUB_ENV"
+          echo "MONITOR_RESPETA_ROBOTS=true" >> "$GITHUB_ENV"
+          echo "Ejecución seleccionada: $MODO"
+
+      - name: Restaurar histórico desde monitor-state
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.reiniciar_estado != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
           if git clone --quiet --depth 1 --branch monitor-state \
               "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" estado_previo; then
-            [ -f estado_previo/datos.json ] && cp estado_previo/datos.json datos.json || true
-            [ -f estado_previo/.monitor_estado.json ] && cp estado_previo/.monitor_estado.json .monitor_estado.json || true
+            [[ -f estado_previo/datos.json ]] && cp estado_previo/datos.json datos.json || true
+            [[ -f estado_previo/.monitor_estado.json ]] && cp estado_previo/.monitor_estado.json .monitor_estado.json || true
             echo "Histórico restaurado."
           else
-            echo "Sin rama monitor-state todavía: primera corrida."
+            echo "Sin rama monitor-state: primera ejecución."
           fi
           rm -rf estado_previo
 
-      - name: Ejecutar monitor
+      - name: Validar motor y catálogo
+        run: |
+          python3 -m unittest -v test_monitor.py
+          python3 monitor_uaf.py --validar-fuentes
+
+      - name: Probar correo
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.probar_correo == true }}
         env:
-          # Presupuesto de tiempo interno, inferior al timeout del job.
-          MONITOR_PRESUPUESTO_SEG: "780"
-          MONITOR_HILOS: "6"
-          MONITOR_BARRIDO: "70"
-          MONITOR_RESPETA_ROBOTS: "true"
-          # Correo (configúralos en Settings → Secrets and variables → Actions)
+          MONITOR_CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
+          MONITOR_SMTP_SERVIDOR: ${{ secrets.MONITOR_SMTP_SERVIDOR }}
+          MONITOR_SMTP_PUERTO: ${{ secrets.MONITOR_SMTP_PUERTO }}
+          MONITOR_SMTP_SEGURIDAD: ${{ secrets.MONITOR_SMTP_SEGURIDAD }}
+          MONITOR_SMTP_USUARIO: ${{ secrets.MONITOR_SMTP_USUARIO }}
+          MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
+          MONITOR_DESTINATARIOS: ${{ secrets.MONITOR_DESTINATARIOS }}
+          MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
+        run: python3 monitor_uaf.py --probar-correo
+
+      - name: Ejecutar monitor
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+        env:
           MONITOR_CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
           MONITOR_SMTP_SERVIDOR: ${{ secrets.MONITOR_SMTP_SERVIDOR }}
           MONITOR_SMTP_PUERTO: ${{ secrets.MONITOR_SMTP_PUERTO }}
@@ -71,40 +132,43 @@ jobs:
           MONITOR_MINIMO_AVISO: ${{ secrets.MONITOR_MINIMO_AVISO }}
           MONITOR_SILENCIO_MINUTOS: ${{ secrets.MONITOR_SILENCIO_MINUTOS }}
           MONITOR_SOLO_UAF: ${{ secrets.MONITOR_SOLO_UAF }}
-        run: python3 monitor_uaf.py
+        run: python3 monitor_uaf.py --modo "$MODO"
 
       - name: Construir sitio estático
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
         run: python3 construye_sitio.py
 
       - name: Subir artefacto de Pages
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
-      - name: Guardar histórico en la rama monitor-state
-        if: always()
+      - name: Guardar histórico en monitor-state
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.probar_correo != true) }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
-          [ -f datos.json ] || exit 0
+          [[ -f datos.json ]] || exit 0
           rm -rf estado_nuevo
           mkdir estado_nuevo
           cp datos.json estado_nuevo/
-          [ -f .monitor_estado.json ] && cp .monitor_estado.json estado_nuevo/ || true
+          [[ -f .monitor_estado.json ]] && cp .monitor_estado.json estado_nuevo/ || true
           cd estado_nuevo
           git init --quiet
           git checkout --quiet -b monitor-state
           git config user.name "monitor-uaf[bot]"
           git config user.email "monitor-uaf@users.noreply.github.com"
           git add -A
-          git commit --quiet -m "Estado del monitor $(date -u +%Y-%m-%dT%H:%M:%SZ)" || exit 0
-          # Rama de un solo commit: el repositorio no crece con 96 corridas al día.
+          git commit --quiet -m "Estado $MODO $(date -u +%Y-%m-%dT%H:%M:%SZ)" || exit 0
           git push --quiet --force \
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" monitor-state
 
   publicar:
     needs: actualizar
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -114,6 +178,6 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - name: Publicar en GitHub Pages
+      - name: Publicar GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4
