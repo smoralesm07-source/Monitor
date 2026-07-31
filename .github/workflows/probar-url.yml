@@ -1,29 +1,280 @@
-- name: Descargar HTML recibido
-  env:
-    URL_PRUEBA: ${{ inputs.url }}
-  shell: bash
-  run: |
-    python3 - <<'PY'
-    import os
-    import requests
+name: Probar URL Monitor UAF
 
-    url = os.environ["URL_PRUEBA"]
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; MonitorUAF/8.4; +https://github.com/)"
-    }
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL de la noticia a probar"
+        required: true
+        type: string
 
-    respuesta = requests.get(
-        url,
-        headers=headers,
-        timeout=30,
-        allow_redirects=True
-    )
+permissions:
+  contents: read
 
-    print("HTTP:", respuesta.status_code)
-    print("URL final:", respuesta.url)
-    print("Bytes:", len(respuesta.content))
-    print("Content-Type:", respuesta.headers.get("content-type"))
+jobs:
+  probar-url:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
-    with open("pagina_recibida.html", "wb") as archivo:
-        archivo.write(respuesta.content)
-    PY
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v6
+
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml
+
+      - name: Descargar HTML recibido
+        env:
+          URL_PRUEBA: ${{ inputs.url }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import requests
+          from bs4 import BeautifulSoup
+
+          url = os.environ["URL_PRUEBA"]
+
+          headers = {
+              "User-Agent": (
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/150.0.0.0 Safari/537.36"
+              ),
+              "Accept": (
+                  "text/html,application/xhtml+xml,application/xml;"
+                  "q=0.9,image/avif,image/webp,*/*;q=0.8"
+              ),
+              "Accept-Language": "es-CL,es;q=0.9,en;q=0.7",
+              "Cache-Control": "no-cache",
+              "Pragma": "no-cache",
+          }
+
+          try:
+              respuesta = requests.get(
+                  url,
+                  headers=headers,
+                  timeout=40,
+                  allow_redirects=True,
+              )
+
+              informacion = {
+                  "url_solicitada": url,
+                  "url_final": respuesta.url,
+                  "estado_http": respuesta.status_code,
+                  "bytes": len(respuesta.content),
+                  "content_type": respuesta.headers.get("content-type", ""),
+                  "servidor": respuesta.headers.get("server", ""),
+                  "historial_redirecciones": [
+                      {
+                          "estado": r.status_code,
+                          "url": r.url,
+                          "location": r.headers.get("location", ""),
+                      }
+                      for r in respuesta.history
+                  ],
+              }
+
+              Path("respuesta_http.json").write_text(
+                  json.dumps(
+                      informacion,
+                      ensure_ascii=False,
+                      indent=2,
+                  ),
+                  encoding="utf-8",
+              )
+
+              Path("pagina_recibida.html").write_bytes(
+                  respuesta.content
+              )
+
+              soup = BeautifulSoup(
+                  respuesta.content,
+                  "lxml",
+              )
+
+              resumen = {
+                  "titulo_html": (
+                      soup.title.get_text(" ", strip=True)
+                      if soup.title
+                      else ""
+                  ),
+                  "cantidad_scripts": len(soup.find_all("script")),
+                  "cantidad_parrafos": len(soup.find_all("p")),
+                  "cantidad_article": len(soup.find_all("article")),
+                  "cantidad_main": len(soup.find_all("main")),
+                  "json_ld": [],
+                  "metadatos": {},
+              }
+
+              for etiqueta in soup.find_all("meta"):
+                  clave = (
+                      etiqueta.get("property")
+                      or etiqueta.get("name")
+                      or etiqueta.get("itemprop")
+                  )
+                  contenido = etiqueta.get("content")
+
+                  if clave and contenido:
+                      resumen["metadatos"][clave] = contenido
+
+              for script in soup.find_all(
+                  "script",
+                  attrs={"type": "application/ld+json"},
+              ):
+                  texto = script.get_text(
+                      "\n",
+                      strip=True,
+                  )
+
+                  if texto:
+                      resumen["json_ld"].append(texto[:20000])
+
+              Path("estructura_html.json").write_text(
+                  json.dumps(
+                      resumen,
+                      ensure_ascii=False,
+                      indent=2,
+                  ),
+                  encoding="utf-8",
+              )
+
+              texto_visible = soup.get_text(
+                  "\n",
+                  strip=True,
+              )
+
+              Path("texto_visible.txt").write_text(
+                  texto_visible,
+                  encoding="utf-8",
+              )
+
+              print("Descarga finalizada")
+              print("HTTP:", respuesta.status_code)
+              print("URL final:", respuesta.url)
+              print("Bytes:", len(respuesta.content))
+              print(
+                  "Content-Type:",
+                  respuesta.headers.get("content-type", ""),
+              )
+              print("Párrafos:", len(soup.find_all("p")))
+              print("Article:", len(soup.find_all("article")))
+              print("Main:", len(soup.find_all("main")))
+              print(
+                  "Scripts JSON-LD:",
+                  len(
+                      soup.find_all(
+                          "script",
+                          attrs={"type": "application/ld+json"},
+                      )
+                  ),
+              )
+
+          except Exception as exc:
+              Path("error_descarga.txt").write_text(
+                  f"{type(exc).__name__}: {exc}",
+                  encoding="utf-8",
+              )
+              raise
+          PY
+
+      - name: Ejecutar diagnóstico del monitor
+        env:
+          URL_PRUEBA: ${{ inputs.url }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -u monitor_uaf.py \
+            --probar-url "$URL_PRUEBA" \
+            2>&1 | tee prueba_url.log
+
+      - name: Buscar señales dentro del HTML
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          archivo = Path("pagina_recibida.html")
+
+          if not archivo.exists():
+              print("No existe pagina_recibida.html")
+              raise SystemExit(0)
+
+          html = archivo.read_text(
+              encoding="utf-8",
+              errors="replace",
+          )
+
+          patrones = {
+              "Unidad de Análisis Financiero": (
+                  r"unidad\s+de\s+an[aá]lisis\s+financiero"
+              ),
+              "UAF": r"\bUAF\b",
+              "Aduanas": r"\bAduanas?\b",
+              "Ollagüe": r"\bOllag[uü]e\b",
+              "articleBody": r"articleBody",
+              "datePublished": r"datePublished",
+              "__NEXT_DATA__": r"__NEXT_DATA__",
+              "application/ld+json": r"application/ld\+json",
+          }
+
+          for nombre, patron in patrones.items():
+              coincidencias = list(
+                  re.finditer(
+                      patron,
+                      html,
+                      flags=re.IGNORECASE,
+                  )
+              )
+
+              print(
+                  f"{nombre}: {len(coincidencias)} coincidencia(s)"
+              )
+
+              for coincidencia in coincidencias[:3]:
+                  inicio = max(
+                      0,
+                      coincidencia.start() - 180,
+                  )
+                  fin = min(
+                      len(html),
+                      coincidencia.end() + 280,
+                  )
+
+                  contexto = html[inicio:fin]
+                  contexto = re.sub(
+                      r"\s+",
+                      " ",
+                      contexto,
+                  )
+
+                  print("  CONTEXTO:", contexto)
+          PY
+
+      - name: Guardar diagnóstico completo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-url-${{ github.run_number }}
+          path: |
+            prueba_url.log
+            pagina_recibida.html
+            respuesta_http.json
+            estructura_html.json
+            texto_visible.txt
+            error_descarga.txt
+          if-no-files-found: warn
+          retention-days: 7
