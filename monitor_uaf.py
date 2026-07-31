@@ -96,7 +96,7 @@ SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
 EXCLUSIONES_EDITORIALES_ARCHIVO = BASE / "exclusiones_editoriales.json"
 CORRECCIONES_FECHAS_ARCHIVO = BASE / "correcciones_fechas.json"
 
-VERSION_MONITOR = "8.4.2-fix-destinatarios-vars"
+VERSION_MONITOR = "8.4.3-soychile-cobertura-fix-destinatarios-vars"
 ESQUEMA_ESTADO = 10
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 UA = "Mozilla/5.0 (compatible; MonitorUAF/8.2; +https://github.com/)"
@@ -232,7 +232,13 @@ FUENTES_PREDETERMINADAS: list[dict[str, Any]] = [
     {"nombre": "Canal 9", "dominio": "canal9.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.canal9.cl/"]},
     {"nombre": "El América", "dominio": "elamerica.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://elamerica.cl/"]},
     {"nombre": "EnLaLinea.cl", "dominio": "enlalinea.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.enlalinea.cl/"]},
-    {"nombre": "SoyChile", "dominio": "soychile.cl", "tipo": "regional", "prioridad": 6, "feeds": ["https://www.soychile.cl/rss.aspx"], "secciones": ["https://www.soychile.cl/"]},
+    {"nombre": "SoyChile", "dominio": "soychile.cl", "tipo": "regional", "prioridad": 9,
+     "feeds": ["https://www.soychile.cl/rss.aspx"],
+     "secciones": [
+         "https://www.soychile.cl/antofagasta/",
+         "https://www.soychile.cl/antofagasta/policial/",
+         "https://www.soychile.cl/",
+     ]},
     {"nombre": "Diario Concepción", "dominio": "diarioconcepcion.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.diarioconcepcion.cl/"]},
     {"nombre": "La Discusión", "dominio": "ladiscusion.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.ladiscusion.cl/"]},
     {"nombre": "Diario El Día", "dominio": "diarioeldia.cl", "tipo": "regional", "prioridad": 5, "secciones": ["https://www.diarioeldia.cl/"]},
@@ -1629,7 +1635,16 @@ def descubre_fuente(fuente: dict[str, Any], modo: str) -> list[dict[str, Any]]:
             cobertura(host, "sitemap", 0, f"{type(exc).__name__}: {exc}")
 
     secciones = fuente.get("secciones", [])
-    limite_sec = len(secciones) if modo == "conciliacion" else min(1, len(secciones))
+    # SoyChile es una red regional: su portada nacional y RSS no siempre exponen
+    # oportunamente las notas locales. En modo rápido se revisan dos portadillas
+    # directas para descubrir artículos cuyo título no contiene UAF pero cuyo
+    # cuerpo sí la menciona.
+    if modo == "conciliacion":
+        limite_sec = len(secciones)
+    elif host == "soychile.cl":
+        limite_sec = min(2, len(secciones))
+    else:
+        limite_sec = min(1, len(secciones))
     for sec in secciones[:limite_sec]:
         if tiempo_agotado(150):
             break
