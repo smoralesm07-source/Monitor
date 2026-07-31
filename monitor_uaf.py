@@ -96,7 +96,7 @@ SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
 EXCLUSIONES_EDITORIALES_ARCHIVO = BASE / "exclusiones_editoriales.json"
 CORRECCIONES_FECHAS_ARCHIVO = BASE / "correcciones_fechas.json"
 
-VERSION_MONITOR = "8.4.3-soychile-cobertura-fix-destinatarios-vars"
+VERSION_MONITOR = "8.4.4-extractor-generico-estados-js"
 ESQUEMA_ESTADO = 10
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 UA = "Mozilla/5.0 (compatible; MonitorUAF/8.2; +https://github.com/)"
@@ -1178,6 +1178,178 @@ def recorre_json(obj: Any) -> Iterable[dict[str, Any]]:
             yield from recorre_json(v)
 
 
+def _extrae_cadenas_javascript(texto: str, minimo: int = 140) -> list[str]:
+    """Extrae cadenas quoted de scripts sin ejecutar JavaScript.
+
+    Tolera escapes y sirve para estados hidratados de Nuxt, Next, Redux,
+    Apollo y otros frameworks. Se limita a cadenas suficientemente largas
+    para evitar procesar menús, nombres de clases y valores triviales.
+    """
+    salida: list[str] = []
+    i = 0
+    n = len(texto)
+    while i < n:
+        if texto[i] not in {'"', "'"}:
+            i += 1
+            continue
+        comilla = texto[i]
+        i += 1
+        inicio = i
+        escapado = False
+        while i < n:
+            c = texto[i]
+            if escapado:
+                escapado = False
+                i += 1
+                continue
+            if c == "\\":
+                escapado = True
+                i += 1
+                continue
+            if c == comilla:
+                bruto = texto[inicio:i]
+                if len(bruto) >= minimo:
+                    salida.append(bruto)
+                i += 1
+                break
+            i += 1
+        else:
+            break
+    return salida
+
+
+def _decodifica_escape_javascript(valor: str) -> str:
+    """Decodifica escapes JavaScript frecuentes sin evaluar código."""
+    if not valor:
+        return ""
+
+    def repl_u(m: re.Match[str]) -> str:
+        try:
+            return chr(int(m.group(1), 16))
+        except (ValueError, OverflowError):
+            return m.group(0)
+
+    def repl_x(m: re.Match[str]) -> str:
+        try:
+            return chr(int(m.group(1), 16))
+        except (ValueError, OverflowError):
+            return m.group(0)
+
+    valor = re.sub(r"\\u([0-9a-fA-F]{4})", repl_u, valor)
+    valor = re.sub(r"\\x([0-9a-fA-F]{2})", repl_x, valor)
+    reemplazos = {
+        r"\\/": "/",
+        r'\\"': '"',
+        r"\\'": "'",
+        r"\\n": "\n",
+        r"\\r": "\n",
+        r"\\t": " ",
+        r"\\b": " ",
+        r"\\f": " ",
+        r"\\\\": "\\",
+    }
+    for origen, destino in reemplazos.items():
+        valor = valor.replace(origen, destino)
+    return html_mod.unescape(valor)
+
+
+def _html_a_texto_editorial(valor: str) -> str:
+    """Convierte HTML embebido en texto conservando límites de párrafo."""
+    valor = _decodifica_escape_javascript(valor)
+    if not valor:
+        return ""
+    valor = re.sub(
+        r"</?(?:div|p|article|section|li|blockquote|h[1-6]|br)\b[^>]*>",
+        "\n",
+        valor,
+        flags=re.I,
+    )
+    valor = re.sub(r"<script\b[^>]*>.*?</script>", " ", valor, flags=re.I | re.S)
+    valor = re.sub(r"<style\b[^>]*>.*?</style>", " ", valor, flags=re.I | re.S)
+    valor = re.sub(r"<[^>]+>", " ", valor)
+    lineas: list[str] = []
+    vistos: set[str] = set()
+    for linea in valor.splitlines():
+        linea = limpia_texto(linea)
+        normal = normaliza(linea)
+        if len(linea) < 25 or normal in vistos:
+            continue
+        if contiene(normal, [
+            "aceptar cookies", "todos los derechos reservados", "suscribete",
+            "inicia sesion", "compartir en facebook", "newsletter",
+        ]):
+            continue
+        vistos.add(normal)
+        lineas.append(linea)
+    return recorta_texto_editorial("\n".join(lineas))
+
+
+def extrae_cuerpo_estado_javascript(texto_html: str) -> dict[str, Any]:
+    """Extrae cuerpos periodísticos incrustados en estados JavaScript.
+
+    Es genérico para páginas renderizadas con Nuxt, Next, Redux, Apollo u
+    otros frameworks que hidratan el artículo dentro de scripts. No ejecuta
+    JavaScript: inspecciona cadenas escapadas y selecciona el candidato con
+    señales editoriales más fuertes.
+    """
+    resultado = {
+        "cuerpo": "",
+        "origen_cuerpo": "sin_cuerpo",
+        "calidad_cuerpo": "baja",
+        "estado_extraccion": "sin_cuerpo",
+        "candidatos_estado_js": 0,
+    }
+    if not texto_html or "<script" not in texto_html.lower():
+        return resultado
+
+    scripts = re.findall(r"<script\b[^>]*>(.*?)</script>", texto_html, flags=re.I | re.S)
+    candidatos: list[tuple[int, str, str]] = []
+    marcadores_estado = (
+        "__nuxt__", "__next_data__", "__initial_state__", "initialstate",
+        "preloadedstate", "apollo_state", "redux", "hydrate", "articlebody",
+    )
+    for script in scripts:
+        script_norm = normaliza(script[:2500])
+        origen = "estado_js_framework" if any(m in script_norm for m in marcadores_estado) else "estado_js_generico"
+        for cadena in _extrae_cadenas_javascript(script):
+            baja = cadena.lower()
+            tiene_html = any(x in baja for x in ("\\u003c", "\\x3c", "&lt;", "<div", "<p", "<article"))
+            tiene_texto_extenso = len(cadena) >= 500 and sum(cadena.count(x) for x in (". ", "; ", ", ")) >= 4
+            if not (tiene_html or tiene_texto_extenso):
+                continue
+            cuerpo = _html_a_texto_editorial(cadena)
+            if len(cuerpo) < 160:
+                continue
+            normal = normaliza(cuerpo)
+            palabras = len(cuerpo.split())
+            parrafos = cuerpo.count("\n") + 1
+            puntuacion = min(palabras, 1200) + min(parrafos * 18, 180)
+            if tiene_html:
+                puntuacion += 140
+            if origen == "estado_js_framework":
+                puntuacion += 80
+            if contiene(normal, ["segun", "informo", "senalo", "fiscalia", "autoridad", "investigacion", "antecedentes"]):
+                puntuacion += 40
+            if contiene(normal, ["menu", "inicio", "contacto", "terminos y condiciones", "politica de privacidad"]):
+                puntuacion -= 120
+            candidatos.append((puntuacion, cuerpo, origen))
+
+    resultado["candidatos_estado_js"] = len(candidatos)
+    if not candidatos:
+        return resultado
+    candidatos.sort(key=lambda x: (x[0], len(x[1])), reverse=True)
+    _, cuerpo, origen = candidatos[0]
+    if len(cuerpo) > MAX_TEXTO_ANALISIS:
+        cuerpo = cuerpo[:MAX_TEXTO_ANALISIS]
+    resultado.update({
+        "cuerpo": cuerpo,
+        "origen_cuerpo": origen,
+        "calidad_cuerpo": "alta",
+        "estado_extraccion": "ok",
+    })
+    return resultado
+
+
 def extrae_articulo_html(raw: bytes, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
     texto_html = decode_html(raw, headers)
     parser = DocumentoHTML()
@@ -1226,6 +1398,19 @@ def extrae_articulo_html(raw: bytes, url: str, headers: dict[str, str] | None = 
     candidatos_cuerpo: list[tuple[str, str, str, int]] = []
     if len(cuerpo_json_limpio) >= 160:
         candidatos_cuerpo.append(("json_ld", cuerpo_json_limpio, "alta", 0))
+
+    # Sitios modernos pueden hidratar el cuerpo dentro de window.__NUXT__,
+    # __NEXT_DATA__, Redux, Apollo u otros estados JavaScript. Se inspeccionan
+    # sin ejecutar código y antes de recurrir al texto genérico de la página.
+    estado_js = extrae_cuerpo_estado_javascript(texto_html)
+    if estado_js.get("cuerpo"):
+        candidatos_cuerpo.append((
+            estado_js["origen_cuerpo"],
+            estado_js["cuerpo"],
+            estado_js["calidad_cuerpo"],
+            0,
+        ))
+
     for origen, bloques, calidad in (
         ("contenedor_editorial", parser.bloques_contenido, "alta"),
         ("article", parser.bloques_article, "alta"),
@@ -1266,6 +1451,7 @@ def extrae_articulo_html(raw: bytes, url: str, headers: dict[str, str] | None = 
         "calidad_cuerpo": calidad_cuerpo,
         "parrafos_cuerpo": cuerpo.count("\n") + (1 if cuerpo else 0),
         "bloques_ruido_omitidos": parser.ruido_omitido + omitidos,
+        "candidatos_estado_js": int(estado_js.get("candidatos_estado_js", 0)),
         "fecha_dt": fecha_dt,
         "fecha_origen": fecha_origen or "desconocida",
         "fecha_publicacion_verificada": bool(fecha_dt),
