@@ -96,7 +96,7 @@ SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
 EXCLUSIONES_EDITORIALES_ARCHIVO = BASE / "exclusiones_editoriales.json"
 CORRECCIONES_FECHAS_ARCHIVO = BASE / "correcciones_fechas.json"
 
-VERSION_MONITOR = "8.4.1-fix-correo-migracion"
+VERSION_MONITOR = "8.4.2-fix-destinatarios-vars"
 ESQUEMA_ESTADO = 10
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 UA = "Mozilla/5.0 (compatible; MonitorUAF/8.2; +https://github.com/)"
@@ -108,10 +108,10 @@ CONFIG_EJEMPLO = {
         "servidor": "smtp.gmail.com",
         "puerto": 587,
         "seguridad": "starttls",
-        "usuario": "tu.correo@gmail.com",
-        "clave": "clave-de-aplicacion",
+        "usuario": "",
+        "clave": "",
         "remitente_nombre": "Monitor UAF Chile",
-        "destinatarios": ["tu.correo@gmail.com"],
+        "destinatarios": [],
         "minimo_para_avisar": 1,
         "silencio_minutos": 0,
         "solo_si_menciona_uaf": True,
@@ -2975,9 +2975,18 @@ def carga_config() -> dict[str, Any]:
                 correo[clave] = conv(env, correo.get(clave)) if conv is env_bool else conv(valor)
             except Exception:
                 pass
+    # Los destinatarios deben provenir explícitamente de GitHub Actions.
+    # Nunca se conserva un valor de ejemplo o de respaldo silencioso.
     dest = os.getenv("MONITOR_DESTINATARIOS")
-    if dest:
-        correo["destinatarios"] = [x.strip() for x in dest.split(",") if x.strip()]
+    correo["destinatarios"] = (
+        [x.strip() for x in dest.split(",") if x.strip()]
+        if dest is not None
+        else []
+    )
+    correo["destinatarios"] = [
+        x for x in correo["destinatarios"]
+        if x.lower() != "tu.correo@gmail.com"
+    ]
     return cfg
 
 
