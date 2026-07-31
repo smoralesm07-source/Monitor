@@ -1,49 +1,29 @@
-name: Probar URL Monitor UAF
+- name: Descargar HTML recibido
+  env:
+    URL_PRUEBA: ${{ inputs.url }}
+  shell: bash
+  run: |
+    python3 - <<'PY'
+    import os
+    import requests
 
-on:
-  workflow_dispatch:
-    inputs:
-      url:
-        description: "URL de la noticia a probar"
-        required: true
-        type: string
+    url = os.environ["URL_PRUEBA"]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MonitorUAF/8.4; +https://github.com/)"
+    }
 
-permissions:
-  contents: read
+    respuesta = requests.get(
+        url,
+        headers=headers,
+        timeout=30,
+        allow_redirects=True
+    )
 
-jobs:
-  probar-url:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    print("HTTP:", respuesta.status_code)
+    print("URL final:", respuesta.url)
+    print("Bytes:", len(respuesta.content))
+    print("Content-Type:", respuesta.headers.get("content-type"))
 
-    steps:
-      - name: Descargar repositorio
-        uses: actions/checkout@v6
-
-      - name: Preparar Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Instalar dependencias
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml
-
-      - name: Ejecutar diagnóstico de URL
-        env:
-          URL_PRUEBA: ${{ inputs.url }}
-        shell: bash
-        run: |
-          set -o pipefail
-          python3 -u monitor_uaf.py --probar-url "$URL_PRUEBA" 2>&1 | tee prueba_url.log
-
-      - name: Guardar diagnóstico
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: diagnostico-url-${{ github.run_number }}
-          path: |
-            prueba_url.log
-          if-no-files-found: warn
-          retention-days: 7
+    with open("pagina_recibida.html", "wb") as archivo:
+        archivo.write(respuesta.content)
+    PY
