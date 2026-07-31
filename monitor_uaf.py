@@ -96,7 +96,7 @@ SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
 EXCLUSIONES_EDITORIALES_ARCHIVO = BASE / "exclusiones_editoriales.json"
 CORRECCIONES_FECHAS_ARCHIVO = BASE / "correcciones_fechas.json"
 
-VERSION_MONITOR = "8.4-correo-conciliacion-30min"
+VERSION_MONITOR = "8.4.1-fix-correo-migracion"
 ESQUEMA_ESTADO = 10
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 UA = "Mozilla/5.0 (compatible; MonitorUAF/8.2; +https://github.com/)"
@@ -2709,6 +2709,9 @@ def carga_estado() -> dict[str, Any]:
         # Conserva vistos para no reenviar correos, pero fuerza revisión de descartes antiguos.
         estado = {"vistos": estado.get("vistos", []), "rotacion_fuentes": estado.get("rotacion_fuentes", 0),
                   "fenomenos_dinamicos": estado.get("fenomenos_dinamicos", {}),
+                  "correos_enviados": estado.get("correos_enviados", []),
+                  "auditoria_correo": estado.get("auditoria_correo", []),
+                  "ultimo_correo": estado.get("ultimo_correo"),
                   "esquema": ESQUEMA_ESTADO, "procesados": {}, "pendientes": {},
                   "migracion_pendiente": True}
     estado.setdefault("vistos", [])
@@ -3316,20 +3319,22 @@ def ejecutar(modo: str) -> int:
     temporal = SALIDA.with_suffix(".tmp")
     temporal.write_text(json.dumps(salida, ensure_ascii=False, indent=1, default=json_default), encoding="utf-8")
     os.replace(temporal, SALIDA)
-    if not migracion:
-        try:
-            envia_correo(nuevos, estado, modo)
-        except Exception as exc:
-            # El correo es un canal accesorio: una falla SMTP no debe impedir
-            # guardar datos ni publicar el dashboard.
-            estado["ultimo_error_correo"] = {
-                "fecha": ahora_cl().isoformat(),
-                "tipo": type(exc).__name__,
-                "mensaje": str(exc)[:500],
-            }
-            log(f"ADVERTENCIA correo no enviado: {type(exc).__name__}: {exc}")
-    else:
-        log("Migración de esquema: se suprimen correos en esta corrida.")
+    # Durante una migración se conservan los IDs ya vistos. Por ello es seguro
+    # evaluar correo para los registros realmente nuevos de esta corrida. Las
+    # semillas históricas y los artículos fuera de la ventana siguen excluidos
+    # por envia_correo(). Esto evita perder para siempre una noticia reciente
+    # detectada en la primera conciliación posterior a una actualización.
+    try:
+        envia_correo(nuevos, estado, modo)
+    except Exception as exc:
+        # El correo es un canal accesorio: una falla SMTP no debe impedir
+        # guardar datos ni publicar el dashboard.
+        estado["ultimo_error_correo"] = {
+            "fecha": ahora_cl().isoformat(),
+            "tipo": type(exc).__name__,
+            "mensaje": str(exc)[:500],
+        }
+        log(f"ADVERTENCIA correo no enviado: {type(exc).__name__}: {exc}")
     guarda_estado(estado)
     log(f"Listo: {len(prensa)} publicaciones · {len(nuevos)} incorporadas · {len(pendientes_final)} pendientes · {salida['cobertura_tecnica']['segundos_corrida']}s")
     return len(nuevos)
