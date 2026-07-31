@@ -96,7 +96,7 @@ SEMILLAS_ARCHIVO = BASE / "semillas_verificadas.json"
 EXCLUSIONES_EDITORIALES_ARCHIVO = BASE / "exclusiones_editoriales.json"
 CORRECCIONES_FECHAS_ARCHIVO = BASE / "correcciones_fechas.json"
 
-VERSION_MONITOR = "8.2.2-fechas-publicacion-confiables"
+VERSION_MONITOR = "8.4-correo-conciliacion-30min"
 ESQUEMA_ESTADO = 10
 TZ_CL = ZoneInfo("America/Santiago") if ZoneInfo else timezone(timedelta(hours=-4))
 UA = "Mozilla/5.0 (compatible; MonitorUAF/8.2; +https://github.com/)"
@@ -2715,6 +2715,8 @@ def carga_estado() -> dict[str, Any]:
     estado.setdefault("procesados", {})
     estado.setdefault("pendientes", {})
     estado.setdefault("fenomenos_dinamicos", {})
+    estado.setdefault("correos_enviados", [])
+    estado.setdefault("auditoria_correo", [])
     estado.setdefault("esquema", ESQUEMA_ESTADO)
     return estado
 
@@ -2728,6 +2730,8 @@ def guarda_estado(estado: dict[str, Any]) -> None:
             procesados[k] = v
     estado["procesados"] = dict(list(procesados.items())[-50_000:])
     estado["vistos"] = list(dict.fromkeys(estado.get("vistos", [])))[-50_000:]
+    estado["correos_enviados"] = list(dict.fromkeys(estado.get("correos_enviados", [])))[-50_000:]
+    estado["auditoria_correo"] = list(estado.get("auditoria_correo", []))[-500:]
     temporal = ESTADO.with_suffix(".tmp")
     temporal.write_text(json.dumps(estado, ensure_ascii=False, indent=1, default=json_default), encoding="utf-8")
     os.replace(temporal, ESTADO)
@@ -2958,6 +2962,8 @@ def carga_config() -> dict[str, Any]:
         "usuario": ("MONITOR_SMTP_USUARIO", str), "clave": ("MONITOR_SMTP_CLAVE", str),
         "remitente_nombre": ("MONITOR_REMITENTE_NOMBRE", str), "minimo_para_avisar": ("MONITOR_MINIMO_AVISO", int),
         "silencio_minutos": ("MONITOR_SILENCIO_MINUTOS", int), "solo_si_menciona_uaf": ("MONITOR_SOLO_UAF", env_bool),
+        "correo_conciliacion": ("MONITOR_CORREO_CONCILIACION", env_bool),
+        "correo_conciliacion_horas": ("MONITOR_CORREO_CONCILIACION_HORAS", int),
     }
     for clave, (env, conv) in mapa.items():
         valor = os.getenv(env)
@@ -2972,34 +2978,113 @@ def carga_config() -> dict[str, Any]:
     return cfg
 
 
+def _fecha_publicacion_registro(reg: dict[str, Any]) -> datetime | None:
+    """Devuelve una fecha de publicación confiable y con zona horaria."""
+    if reg.get("fecha_publicacion_verificada") is False:
+        return None
+    fecha = parsea_fecha(reg.get("fecha_hora") or reg.get("fecha") or "")
+    if not fecha:
+        return None
+    if fecha.tzinfo is None:
+        fecha = fecha.replace(tzinfo=TZ_CL)
+    return fecha
+
+
+def _es_semilla_historica(reg: dict[str, Any]) -> bool:
+    origenes = set(reg.get("origenes_busqueda") or [])
+    origenes.add(reg.get("origen_busqueda", ""))
+    return bool(reg.get("verificacion_manual") or "semilla_verificada" in origenes)
+
+
+def _registra_evento_correo(estado: dict[str, Any], evento: dict[str, Any]) -> None:
+    evento = {"fecha": ahora_cl().isoformat(), **evento}
+    estado.setdefault("auditoria_correo", []).append(evento)
+    estado["auditoria_correo"] = estado["auditoria_correo"][-500:]
+
+
 def envia_correo(nuevos: list[dict[str, Any]], estado: dict[str, Any], modo: str) -> None:
-    if modo != "rapido":
-        return
     cfg = carga_config().get("correo", {})
     if not cfg.get("activo"):
+        _registra_evento_correo(estado, {"modo": modo, "estado": "omitido", "motivo": "correo_desactivado"})
         return
+
+    permite_conciliacion = bool(cfg.get("correo_conciliacion", False))
+    horas_conciliacion = max(1, int(cfg.get("correo_conciliacion_horas", 24) or 24))
+    if modo == "conciliacion" and not permite_conciliacion:
+        _registra_evento_correo(estado, {"modo": modo, "estado": "omitido", "motivo": "correo_conciliacion_desactivado"})
+        return
+    if modo not in {"rapido", "conciliacion"}:
+        return
+
     silencio = max(0, int(cfg.get("silencio_minutos", 0) or 0))
     ultimo = parsea_fecha(estado.get("ultimo_correo"))
     if silencio and ultimo and ultimo > ahora_cl() - timedelta(minutes=silencio):
         log(f"Correo omitido por silencio de {silencio} minutos.")
+        _registra_evento_correo(estado, {"modo": modo, "estado": "omitido", "motivo": "periodo_silencio"})
         return
-    avisos = [r for r in nuevos if r.get("uaf")]
-    if not avisos or len(avisos) < int(cfg.get("minimo_para_avisar", 1)):
+
+    ya_enviados = set(estado.get("correos_enviados", []))
+    ahora = ahora_cl()
+    avisos: list[dict[str, Any]] = []
+    motivos_omitidos: Counter[str] = Counter()
+    for reg in nuevos:
+        rid = reg.get("id") or id_registro(reg.get("link", ""), reg.get("titulo", ""))
+        if rid in ya_enviados:
+            motivos_omitidos["ya_notificada"] += 1
+            continue
+        if not reg.get("uaf"):
+            motivos_omitidos["sin_mencion_uaf_directa"] += 1
+            continue
+        if modo == "conciliacion":
+            if _es_semilla_historica(reg):
+                motivos_omitidos["semilla_historica"] += 1
+                continue
+            fecha_pub = _fecha_publicacion_registro(reg)
+            if not fecha_pub:
+                motivos_omitidos["fecha_no_verificada"] += 1
+                continue
+            antiguedad = ahora - fecha_pub.astimezone(ahora.tzinfo)
+            if antiguedad < timedelta(0) or antiguedad > timedelta(hours=horas_conciliacion):
+                motivos_omitidos["fuera_ventana_conciliacion"] += 1
+                continue
+        avisos.append(reg)
+
+    minimo = int(cfg.get("minimo_para_avisar", 1) or 1)
+    if not avisos or len(avisos) < minimo:
+        _registra_evento_correo(estado, {
+            "modo": modo, "estado": "omitido", "motivo": "sin_avisos_elegibles",
+            "candidatos": len(nuevos), "elegibles": len(avisos), "detalle": dict(motivos_omitidos),
+        })
         return
+
     destinatarios = cfg.get("destinatarios") or []
     if not destinatarios:
+        _registra_evento_correo(estado, {"modo": modo, "estado": "error", "motivo": "sin_destinatarios"})
+        log("ADVERTENCIA correo no enviado: MONITOR_DESTINATARIOS está vacío.")
         return
+
+    recuperada = modo == "conciliacion"
+    asunto_tipo = "recuperada(s) en conciliación" if recuperada else "nueva(s) mención(es)"
     msg = EmailMessage()
-    msg["Subject"] = f"Monitor UAF Chile: {len(avisos)} nueva(s) mención(es)"
+    msg["Subject"] = f"Monitor UAF Chile: {len(avisos)} {asunto_tipo}"
     msg["From"] = formataddr((cfg.get("remitente_nombre", "Monitor UAF Chile"), cfg.get("usuario", "")))
     msg["To"] = ", ".join(destinatarios)
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
-    lineas = ["Se detectaron nuevas menciones verificadas de la UAF de Chile:", ""]
-    for r in avisos[:25]:
-        lineas += [f"{r.get('fecha_legible')} · {r.get('medio')}", r.get("titulo", ""),
-                   r.get("contexto_uaf") or r.get("resumen", ""), r.get("link", ""), ""]
+    encabezado = (
+        f"Se recuperaron en conciliación menciones verificadas de la UAF publicadas durante las últimas {horas_conciliacion} horas:"
+        if recuperada else "Se detectaron nuevas menciones verificadas de la UAF de Chile:"
+    )
+    lineas = [encabezado, ""]
+    for reg in avisos[:25]:
+        lineas += [
+            f"{reg.get('fecha_legible')} · {reg.get('medio')}",
+            reg.get("titulo", ""),
+            reg.get("contexto_uaf") or reg.get("resumen", ""),
+            reg.get("link", ""), "",
+        ]
     msg.set_content("\n".join(lineas))
+
     servidor = cfg.get("servidor")
     puerto = int(cfg.get("puerto", 587))
     seguridad = str(cfg.get("seguridad", "starttls")).lower()
@@ -3015,11 +3100,22 @@ def envia_correo(nuevos: list[dict[str, Any]], estado: dict[str, Any], modo: str
         with smtplib.SMTP(servidor, puerto, timeout=30) as smtp:
             smtp.ehlo()
             if seguridad == "starttls":
-                smtp.starttls(context=contexto); smtp.ehlo()
+                smtp.starttls(context=contexto)
+                smtp.ehlo()
             if usuario:
                 smtp.login(usuario, clave)
             smtp.send_message(msg)
-    estado["ultimo_correo"] = ahora_cl().isoformat()
+
+    ids_enviados = [reg.get("id") or id_registro(reg.get("link", ""), reg.get("titulo", "")) for reg in avisos]
+    estado.setdefault("correos_enviados", []).extend(ids_enviados)
+    estado["correos_enviados"] = list(dict.fromkeys(estado["correos_enviados"]))[-50_000:]
+    estado["ultimo_correo"] = ahora.isoformat()
+    _registra_evento_correo(estado, {
+        "modo": modo, "estado": "enviado", "cantidad": len(avisos),
+        "ventana_horas": horas_conciliacion if recuperada else None,
+        "ids": ids_enviados[:25],
+    })
+    log(f"Correo enviado: modo={modo} · avisos={len(avisos)} · destinatarios={len(destinatarios)}")
 
 
 # ---------------------------------------------------------------------------
@@ -3189,6 +3285,9 @@ def ejecutar(modo: str) -> int:
             "extorsion_secuestro_confirmadas": sum(1 for r in prensa if "extorsion_secuestro" in r.get("precedentes", [])),
             "menciones_extorsion_secuestro_descartadas": sum(1 for r in prensa if any("secuestro" in x or "extors" in x for x in r.get("precedentes_descartados", []))),
             "fenomenos_dinamicos_activos": len(fenomenos_dinamicos),
+            "correo_conciliacion_habilitado": env_bool("MONITOR_CORREO_CONCILIACION", False),
+            "correo_conciliacion_horas": env_int("MONITOR_CORREO_CONCILIACION_HORAS", 24),
+            "ultimo_evento_correo": (estado.get("auditoria_correo") or [None])[-1],
         },
         "cobertura_tecnica": {
             "cuerpos_extraidos": sum(1 for r in prensa if r.get("cuerpo_extraido")),
