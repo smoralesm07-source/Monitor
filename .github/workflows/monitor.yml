@@ -2,8 +2,8 @@ name: Actualizar y publicar monitor UAF
 
 on:
   schedule:
-    - cron: "7,22,37,52 * * * *"
-    - cron: "13 7 * * *"
+    - cron: "7,37 * * * *"
+    - cron: "22 7 * * *"
   workflow_dispatch:
     inputs:
       modo:
@@ -24,6 +24,8 @@ on:
 permissions:
   contents: read
 
+# Una sola ejecución modifica datos.json y monitor-state a la vez. GitHub conserva
+# como máximo una corrida pendiente del mismo grupo, evitando una cola creciente.
 concurrency:
   group: monitor-uaf
   cancel-in-progress: false
@@ -31,7 +33,7 @@ concurrency:
 jobs:
   actualizar:
     runs-on: ubuntu-latest
-    timeout-minutes: 58
+    timeout-minutes: 48
     permissions:
       contents: write
     env:
@@ -67,7 +69,7 @@ jobs:
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             MODO="${{ inputs.modo }}"
-          elif [[ "${{ github.event.schedule }}" == "13 7 * * *" ]]; then
+          elif [[ "${{ github.event.schedule }}" == "22 7 * * *" ]]; then
             MODO="conciliacion"
           else
             MODO="rapido"
@@ -83,12 +85,12 @@ jobs:
             echo "MONITOR_MAX_SITEMAPS_FUENTE=10" >> "$GITHUB_ENV"
             echo "MONITOR_MAX_URLS_SITEMAP=550" >> "$GITHUB_ENV"
           else
-            echo "MONITOR_PRESUPUESTO_SEG=780" >> "$GITHUB_ENV"
+            echo "MONITOR_PRESUPUESTO_SEG=900" >> "$GITHUB_ENV"
             echo "MONITOR_HILOS=8" >> "$GITHUB_ENV"
-            echo "MONITOR_MAX_ENRIQUECER=280" >> "$GITHUB_ENV"
-            echo "MONITOR_MAX_SITE_QUERIES=48" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_ENRIQUECER=240" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_SITE_QUERIES=32" >> "$GITHUB_ENV"
             echo "MONITOR_BARRIDO_MIN_FUENTE=2" >> "$GITHUB_ENV"
-            echo "MONITOR_FUENTES_ROTACION=14" >> "$GITHUB_ENV"
+            echo "MONITOR_FUENTES_ROTACION=12" >> "$GITHUB_ENV"
           fi
           echo "MONITOR_DIAS_PROCESADOS=45" >> "$GITHUB_ENV"
           echo "MONITOR_RESPETA_ROBOTS=true" >> "$GITHUB_ENV"
@@ -112,11 +114,20 @@ jobs:
           fi
           rm -rf estado_previo
 
-      - name: Validar motor y catálogo
+      - name: Validación completa del motor y catálogo
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '22 7 * * *' }}
         shell: bash
         run: |
           set -o pipefail
           python3 -m unittest -v test_monitor.py 2>&1 | tee validacion.log
+          python3 -u monitor_uaf.py --validar-fuentes 2>&1 | tee -a validacion.log
+
+      - name: Validación rápida programada
+        if: ${{ github.event_name == 'schedule' && github.event.schedule != '22 7 * * *' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -m py_compile monitor_uaf.py construye_sitio.py 2>&1 | tee validacion.log
           python3 -u monitor_uaf.py --validar-fuentes 2>&1 | tee -a validacion.log
 
       - name: Probar correo
@@ -128,12 +139,34 @@ jobs:
           MONITOR_SMTP_SEGURIDAD: ${{ secrets.MONITOR_SMTP_SEGURIDAD }}
           MONITOR_SMTP_USUARIO: ${{ secrets.MONITOR_SMTP_USUARIO }}
           MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
-          MONITOR_DESTINATARIOS: ${{ vars.MONITOR_DESTINATARIOS }}
+          MONITOR_DESTINATARIOS: ${{ vars.MONITOR_DESTINATARIOS || secrets.MONITOR_DESTINATARIOS }}
           MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
         shell: bash
         run: |
           set -o pipefail
           python3 -u monitor_uaf.py --probar-correo 2>&1 | tee monitor.log
+
+      - name: Validar configuración de destinatarios
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+        env:
+          CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
+          DESTINATARIOS: ${{ vars.MONITOR_DESTINATARIOS || secrets.MONITOR_DESTINATARIOS }}
+        shell: bash
+        run: |
+          if [[ "${CORREO_ACTIVO,,}" == "true" ]]; then
+            if [[ -z "$DESTINATARIOS" ]]; then
+              echo "::warning title=Correo sin destinatarios::MONITOR_DESTINATARIOS está vacío; el dashboard se actualizará, pero no habrá avisos."
+            else
+              CANTIDAD=$(python3 - <<'PY'
+          import os
+          print(len([x for x in os.environ.get("DESTINATARIOS", "").split(",") if x.strip()]))
+          PY
+              )
+              echo "Correo activo; destinatarios configurados: $CANTIDAD"
+            fi
+          else
+            echo "Correo automático desactivado."
+          fi
 
       - name: Ejecutar monitor
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
@@ -144,11 +177,13 @@ jobs:
           MONITOR_SMTP_SEGURIDAD: ${{ secrets.MONITOR_SMTP_SEGURIDAD }}
           MONITOR_SMTP_USUARIO: ${{ secrets.MONITOR_SMTP_USUARIO }}
           MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
-          MONITOR_DESTINATARIOS: ${{ secrets.MONITOR_DESTINATARIOS }}
+          MONITOR_DESTINATARIOS: ${{ vars.MONITOR_DESTINATARIOS || secrets.MONITOR_DESTINATARIOS }}
           MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
           MONITOR_MINIMO_AVISO: ${{ secrets.MONITOR_MINIMO_AVISO }}
           MONITOR_SILENCIO_MINUTOS: ${{ secrets.MONITOR_SILENCIO_MINUTOS }}
           MONITOR_SOLO_UAF: ${{ secrets.MONITOR_SOLO_UAF }}
+          MONITOR_CORREO_CONCILIACION: ${{ vars.MONITOR_CORREO_CONCILIACION }}
+          MONITOR_CORREO_CONCILIACION_HORAS: ${{ vars.MONITOR_CORREO_CONCILIACION_HORAS }}
         shell: bash
         run: |
           set -o pipefail
