@@ -32,7 +32,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, Iterable
 
-VERSION_MODULO = "1.0.0-entidades-hibridas"
+VERSION_MODULO = "1.0.1-entidades-hibridas-fix-dependencias"
 BASE = Path(__file__).resolve().parent
 DEFAULT_INPUT = BASE / "datos.json"
 DEFAULT_CONFIG = BASE / "entidades_config.json"
@@ -165,9 +165,11 @@ def patrones_entity_ruler(config: dict[str, Any]) -> list[dict[str, Any]]:
 def cargar_pipeline(modelo: str, config: dict[str, Any], solo_reglas: bool = False):
     try:
         import spacy
-    except ImportError as exc:
+    except Exception as exc:
         raise RuntimeError(
-            "spaCy no está instalado. Ejecuta: pip install -r requirements_entidades.txt"
+            "No fue posible importar spaCy o alguna de sus dependencias. "
+            "Ejecuta: pip install -r requirements_entidades.txt. "
+            f"Detalle original: {type(exc).__name__}: {exc}"
         ) from exc
 
     usado = modelo
@@ -581,14 +583,17 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
     salida = args.salida or args.entrada
-    if not args.entrada.exists():
-        print(f"No existe el archivo de entrada: {args.entrada}", file=sys.stderr)
-        return 2
+
+    # La validación comprueba configuración y pipeline sin exigir datos.json.
     config = carga_config(args.config)
     nlp, modelo_usado, estadistico = cargar_pipeline(args.modelo, config, args.solo_reglas)
     if args.validar:
         print(f"Módulo válido: {VERSION_MODULO} · modelo={modelo_usado} · estadístico={estadistico}")
         return 0
+
+    if not args.entrada.exists():
+        print(f"No existe el archivo de entrada: {args.entrada}", file=sys.stderr)
+        return 2
     datos = json.loads(args.entrada.read_text(encoding="utf-8"))
     if not isinstance(datos, dict):
         raise ValueError("datos.json debe contener un objeto JSON")
