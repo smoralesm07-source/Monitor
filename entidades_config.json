@@ -1,0 +1,849 @@
+{
+  "descripcion": "Configuración relacional LA/FT con entidades, relaciones explícitas, roles y geografía de Chile.",
+  "version": "2.1.1",
+  "modelo_recomendado": "es_core_news_sm",
+  "max_texto_por_publicacion": 40000,
+  "max_entidades_por_publicacion": 60,
+  "max_relaciones_globales": 4500,
+  "batch_size": 16,
+  "minimo_caracteres": 3,
+  "incluir_rut": false,
+  "exclusiones": [
+    "Chile",
+    "Gobierno",
+    "Estado",
+    "Región",
+    "lunes",
+    "martes",
+    "miércoles",
+    "jueves",
+    "viernes",
+    "sábado",
+    "domingo"
+  ],
+  "aliases": [
+    {
+      "canonico": "Unidad de Análisis Financiero",
+      "tipo": "ORGANISMO_PUBLICO",
+      "variantes": [
+        "UAF",
+        "UAF Chile",
+        "Unidad de Analisis Financiero"
+      ]
+    },
+    {
+      "canonico": "Ministerio Público / Fiscalía de Chile",
+      "tipo": "ORGANISMO_PUBLICO",
+      "variantes": [
+        "Ministerio Público",
+        "Ministerio Publico",
+        "Fiscalía de Chile",
+        "Fiscalia de Chile",
+        "Fiscalía Nacional",
+        "Fiscalia Nacional"
+      ]
+    },
+    {
+      "canonico": "Servicio de Impuestos Internos",
+      "tipo": "ORGANISMO_PUBLICO",
+      "variantes": [
+        "SII",
+        "Servicio de Impuestos Internos"
+      ]
+    },
+    {
+      "canonico": "Comisión para el Mercado Financiero",
+      "tipo": "ORGANISMO_PUBLICO",
+      "variantes": [
+        "CMF",
+        "Comisión para el Mercado Financiero",
+        "Comision para el Mercado Financiero"
+      ]
+    },
+    {
+      "canonico": "Servicio Nacional de Aduanas",
+      "tipo": "ORGANISMO_PUBLICO",
+      "variantes": [
+        "Aduanas",
+        "Servicio Nacional de Aduanas"
+      ]
+    },
+    {
+      "canonico": "Policía de Investigaciones de Chile",
+      "tipo": "ORGANISMO_PUBLICO",
+      "variantes": [
+        "PDI",
+        "Policía de Investigaciones",
+        "Policia de Investigaciones"
+      ]
+    },
+    {
+      "canonico": "Carabineros de Chile",
+      "tipo": "ORGANISMO_PUBLICO",
+      "variantes": [
+        "Carabineros",
+        "Carabineros de Chile"
+      ]
+    },
+    {
+      "canonico": "Tesorería General de la República",
+      "tipo": "ORGANISMO_PUBLICO",
+      "variantes": [
+        "TGR",
+        "Tesorería General de la República",
+        "Tesoreria General de la Republica"
+      ]
+    },
+    {
+      "canonico": "Superintendencia de Casinos de Juego",
+      "tipo": "ORGANISMO_PUBLICO",
+      "variantes": [
+        "SCJ",
+        "Superintendencia de Casinos de Juego"
+      ]
+    },
+    {
+      "canonico": "Grupo de Acción Financiera",
+      "tipo": "ORGANIZACION",
+      "variantes": [
+        "GAFI",
+        "FATF",
+        "Grupo de Acción Financiera",
+        "Grupo de Accion Financiera"
+      ]
+    },
+    {
+      "canonico": "GAFILAT",
+      "tipo": "ORGANIZACION",
+      "variantes": [
+        "GAFILAT",
+        "Grupo de Acción Financiera de Latinoamérica",
+        "Grupo de Accion Financiera de Latinoamerica"
+      ]
+    },
+    {
+      "canonico": "Grupo Egmont",
+      "tipo": "ORGANIZACION",
+      "variantes": [
+        "Grupo Egmont",
+        "Egmont Group"
+      ]
+    },
+    {
+      "canonico": "BancoEstado",
+      "tipo": "INSTITUCION_FINANCIERA",
+      "variantes": [
+        "BancoEstado",
+        "Banco Estado",
+        "Banco del Estado de Chile"
+      ]
+    }
+  ],
+  "patrones": [
+    {
+      "label": "ORGANISMO_PUBLICO",
+      "pattern": [
+        {
+          "LOWER": "fiscalía"
+        },
+        {
+          "LOWER": "regional"
+        },
+        {
+          "IS_TITLE": true,
+          "OP": "+"
+        }
+      ]
+    },
+    {
+      "label": "EMPRESA",
+      "pattern": [
+        {
+          "LOWER": {
+            "IN": [
+              "inversiones",
+              "comercial",
+              "inmobiliaria",
+              "sociedad"
+            ]
+          }
+        },
+        {
+          "IS_TITLE": true,
+          "OP": "+"
+        },
+        {
+          "LOWER": {
+            "IN": [
+              "spa",
+              "ltda",
+              "eirl"
+            ]
+          },
+          "OP": "?"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "rol": "investigado",
+      "tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "patron": "\\b(?:investigad[oa]|indagad[oa])s?\\b"
+    },
+    {
+      "rol": "imputado",
+      "tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\bimputad[oa]s?\\b"
+    },
+    {
+      "rol": "formalizado",
+      "tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\bformaliz(?:ó|o|ado|ada|ados|adas)\\b"
+    },
+    {
+      "rol": "acusado",
+      "tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\bacusad[oa]s?\\b"
+    },
+    {
+      "rol": "condenado",
+      "tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\bcondenad[oa]s?\\b"
+    },
+    {
+      "rol": "detenido",
+      "tipos": [
+        "PERSONA"
+      ],
+      "patron": "\\bdetenid[oa]s?\\b"
+    },
+    {
+      "rol": "querellado",
+      "tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\bquerellad[oa]s?\\b"
+    },
+    {
+      "rol": "víctima",
+      "tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\bvíctima(?:s)?\\b"
+    },
+    {
+      "rol": "representante",
+      "tipos": [
+        "PERSONA"
+      ],
+      "patron": "\\b(?:representante|apoderad[oa])\\b"
+    },
+    {
+      "rol": "socio o accionista",
+      "tipos": [
+        "PERSONA"
+      ],
+      "patron": "\\b(?:socio|socia|accionista)s?\\b"
+    },
+    {
+      "rol": "ejecutivo",
+      "tipos": [
+        "PERSONA"
+      ],
+      "patron": "\\b(?:gerente|director|directora|ejecutivo|ejecutiva|presidente)\\b"
+    },
+    {
+      "rol": "fiscal",
+      "tipos": [
+        "PERSONA"
+      ],
+      "patron": "\\bfiscal(?:es)?\\b"
+    },
+    {
+      "rol": "abogado",
+      "tipos": [
+        "PERSONA"
+      ],
+      "patron": "\\babogad[oa]s?\\b"
+    },
+    {
+      "rol": "autoridad",
+      "tipos": [
+        "PERSONA"
+      ],
+      "patron": "\\b(?:ministro|subsecretario|senador|diputado|director nacional|superintendente)\\b"
+    },
+    {
+      "rol": "querellante",
+      "tipos": [
+        "ORGANISMO_PUBLICO",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\b(?:presentó|interpuso|presenta|interpone).{0,35}querella\\b"
+    }
+  ],
+  "relaciones": [
+    {
+      "tipo": "REPRESENTA_A",
+      "etiqueta": "representa a",
+      "origen_tipos": [
+        "PERSONA"
+      ],
+      "destino_tipos": [
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "patron": "\\b(?:representante|apoderad[oa]|mandatari[oa])\\s+(?:de|del|la)\\b",
+      "ambito": "entre",
+      "dirigida": true,
+      "confianza": "alta",
+      "max_distancia_destino": 28
+    },
+    {
+      "tipo": "EJECUTIVO_DE",
+      "etiqueta": "es ejecutivo de",
+      "origen_tipos": [
+        "PERSONA"
+      ],
+      "destino_tipos": [
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "patron": "\\b(?:gerente|director(?:a)?|presidente|ejecutiv[oa])\\s+(?:de|del|la)\\b|\\b(?:presidida|dirigida|administrada)\\s+por\\b",
+      "ambito": "entre",
+      "dirigida": true,
+      "confianza": "alta",
+      "max_distancia_destino": 28
+    },
+    {
+      "tipo": "SOCIO_DE",
+      "etiqueta": "es socio o accionista de",
+      "origen_tipos": [
+        "PERSONA"
+      ],
+      "destino_tipos": [
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "patron": "\\b(?:socio|socia|accionista|controlador(?:a)?|dueñ[oa]|propietari[oa])\\s+(?:de|del|la)\\b|\\b(?:controlada|propiedad)\\s+por\\b",
+      "ambito": "entre",
+      "dirigida": true,
+      "confianza": "alta",
+      "max_distancia_destino": 28
+    },
+    {
+      "tipo": "INVESTIGA_A",
+      "etiqueta": "investiga a",
+      "origen_tipos": [
+        "ORGANISMO_PUBLICO"
+      ],
+      "destino_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "patron": "\\b(?:investiga|investigó|indaga|indagó|persigue|persiguió)\\s+(?:a|al|la|los|las)?\\b|\\b(?:investigad[oa]|indagad[oa])\\s+por\\b",
+      "ambito": "entre",
+      "dirigida": true,
+      "confianza": "alta",
+      "max_distancia_destino": 18
+    },
+    {
+      "tipo": "FORMALIZA_A",
+      "etiqueta": "formaliza a",
+      "origen_tipos": [
+        "ORGANISMO_PUBLICO"
+      ],
+      "destino_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\bformaliz(?:a|ó|o|aron)\\s+(?:a|al|la|los|las)?\\b|\\bformalizad[oa]s?\\s+por\\b",
+      "ambito": "entre",
+      "dirigida": true,
+      "confianza": "alta",
+      "max_distancia_destino": 18
+    },
+    {
+      "tipo": "ACUSA_A",
+      "etiqueta": "acusa a",
+      "origen_tipos": [
+        "ORGANISMO_PUBLICO"
+      ],
+      "destino_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\b(?:acusó|acusa|acusaron|imputó|imputa|imputaron)\\s+(?:a|al|la|los|las)?\\b|\\b(?:acusad[oa]|imputad[oa])s?\\s+por\\b",
+      "ambito": "entre",
+      "dirigida": true,
+      "confianza": "alta",
+      "max_distancia_destino": 18
+    },
+    {
+      "tipo": "CONDENA_A",
+      "etiqueta": "condena a",
+      "origen_tipos": [
+        "ORGANISMO_PUBLICO"
+      ],
+      "destino_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION"
+      ],
+      "patron": "\\b(?:condenó|condena|condenaron)\\s+(?:a|al|la|los|las)?\\b|\\bcondenad[oa]s?\\s+por\\b",
+      "ambito": "entre",
+      "dirigida": true,
+      "confianza": "alta",
+      "max_distancia_destino": 18
+    },
+    {
+      "tipo": "QUERELLA_CONTRA",
+      "etiqueta": "presenta querella contra",
+      "origen_tipos": [
+        "ORGANISMO_PUBLICO",
+        "EMPRESA",
+        "ORGANIZACION",
+        "PERSONA"
+      ],
+      "destino_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "patron": "\\b(?:querella|se querelló|presentó querella|interpuso querella)\\s+(?:contra|en contra de)\\b",
+      "ambito": "entre",
+      "dirigida": true,
+      "confianza": "alta",
+      "max_distancia_destino": 18
+    },
+    {
+      "tipo": "TRANSACCION_ENTRE",
+      "etiqueta": "registra transferencias u operaciones con",
+      "origen_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "destino_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "patron": "\\b(?:transferencias?|transacciones?|depósitos?|giros?|pagos?|operaciones?)\\s+(?:a|hacia|desde|con|entre)\\b|\\b(?:transfirió|depositó|giró|pagó|recibió)\\b",
+      "ambito": "entre",
+      "dirigida": false,
+      "confianza": "media"
+    },
+    {
+      "tipo": "VINCULADO_CON",
+      "etiqueta": "es vinculado o relacionado con",
+      "origen_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "destino_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "patron": "\\b(?:vinculad[oa]|relacionad[oa]|asociad[oa]|ligad[oa])s?\\s+(?:a|con)\\b",
+      "ambito": "entre",
+      "dirigida": false,
+      "confianza": "media"
+    },
+    {
+      "tipo": "UBICADA_EN",
+      "etiqueta": "se ubica u opera en",
+      "origen_tipos": [
+        "PERSONA",
+        "EMPRESA",
+        "ORGANIZACION",
+        "INSTITUCION_FINANCIERA"
+      ],
+      "destino_tipos": [
+        "LUGAR"
+      ],
+      "patron": "\\b(?:domiciliad[oa]|ubicad[oa]|con sede|operaba|funcionaba|residía|reside|radicad[oa])\\s+(?:en|desde)\\b",
+      "ambito": "entre",
+      "dirigida": true,
+      "confianza": "alta"
+    }
+  ],
+  "lugares": [
+    {
+      "nombre": "Arica",
+      "region": "Arica y Parinacota",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -18.4783,
+      "lon": -70.3126,
+      "variantes": [
+        "Región de Arica y Parinacota",
+        "Arica y Parinacota"
+      ]
+    },
+    {
+      "nombre": "Iquique",
+      "region": "Tarapacá",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -20.2307,
+      "lon": -70.1357,
+      "variantes": [
+        "Región de Tarapacá",
+        "Tarapacá"
+      ]
+    },
+    {
+      "nombre": "Alto Hospicio",
+      "region": "Tarapacá",
+      "pais": "Chile",
+      "nivel": "comuna",
+      "lat": -20.268,
+      "lon": -70.102,
+      "variantes": []
+    },
+    {
+      "nombre": "Antofagasta",
+      "region": "Antofagasta",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -23.6509,
+      "lon": -70.3975,
+      "variantes": [
+        "Región de Antofagasta"
+      ]
+    },
+    {
+      "nombre": "Calama",
+      "region": "Antofagasta",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -22.4567,
+      "lon": -68.9237,
+      "variantes": []
+    },
+    {
+      "nombre": "Copiapó",
+      "region": "Atacama",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -27.3668,
+      "lon": -70.3323,
+      "variantes": [
+        "Copiapo",
+        "Región de Atacama",
+        "Atacama"
+      ]
+    },
+    {
+      "nombre": "La Serena",
+      "region": "Coquimbo",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -29.9027,
+      "lon": -71.2519,
+      "variantes": [
+        "Región de Coquimbo"
+      ]
+    },
+    {
+      "nombre": "Coquimbo",
+      "region": "Coquimbo",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -29.9533,
+      "lon": -71.3395,
+      "variantes": []
+    },
+    {
+      "nombre": "Valparaíso",
+      "region": "Valparaíso",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -33.0472,
+      "lon": -71.6127,
+      "variantes": [
+        "Valparaiso",
+        "Región de Valparaíso",
+        "Región de Valparaiso"
+      ]
+    },
+    {
+      "nombre": "Viña del Mar",
+      "region": "Valparaíso",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -33.0153,
+      "lon": -71.55,
+      "variantes": [
+        "Vina del Mar"
+      ]
+    },
+    {
+      "nombre": "San Antonio",
+      "region": "Valparaíso",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -33.593,
+      "lon": -71.6217,
+      "variantes": []
+    },
+    {
+      "nombre": "Los Andes",
+      "region": "Valparaíso",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -32.8337,
+      "lon": -70.5983,
+      "variantes": []
+    },
+    {
+      "nombre": "Santiago",
+      "region": "Metropolitana de Santiago",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -33.4489,
+      "lon": -70.6693,
+      "variantes": [
+        "Región Metropolitana",
+        "Region Metropolitana",
+        "Metropolitana"
+      ]
+    },
+    {
+      "nombre": "Pudahuel",
+      "region": "Metropolitana de Santiago",
+      "pais": "Chile",
+      "nivel": "comuna",
+      "lat": -33.437,
+      "lon": -70.764,
+      "variantes": []
+    },
+    {
+      "nombre": "Quilicura",
+      "region": "Metropolitana de Santiago",
+      "pais": "Chile",
+      "nivel": "comuna",
+      "lat": -33.357,
+      "lon": -70.729,
+      "variantes": []
+    },
+    {
+      "nombre": "Maipú",
+      "region": "Metropolitana de Santiago",
+      "pais": "Chile",
+      "nivel": "comuna",
+      "lat": -33.5106,
+      "lon": -70.757,
+      "variantes": [
+        "Maipu"
+      ]
+    },
+    {
+      "nombre": "Rancagua",
+      "region": "O'Higgins",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -34.1708,
+      "lon": -70.7444,
+      "variantes": [
+        "Región de O'Higgins",
+        "O'Higgins"
+      ]
+    },
+    {
+      "nombre": "Talca",
+      "region": "Maule",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -35.4264,
+      "lon": -71.6554,
+      "variantes": [
+        "Región del Maule",
+        "Maule"
+      ]
+    },
+    {
+      "nombre": "Curicó",
+      "region": "Maule",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -34.9828,
+      "lon": -71.2394,
+      "variantes": [
+        "Curico"
+      ]
+    },
+    {
+      "nombre": "Chillán",
+      "region": "Ñuble",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -36.6066,
+      "lon": -72.1034,
+      "variantes": [
+        "Chillan",
+        "Región de Ñuble",
+        "Nuble",
+        "Ñuble"
+      ]
+    },
+    {
+      "nombre": "Concepción",
+      "region": "Biobío",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -36.8201,
+      "lon": -73.0444,
+      "variantes": [
+        "Concepcion",
+        "Región del Biobío",
+        "Biobio",
+        "Biobío"
+      ]
+    },
+    {
+      "nombre": "Talcahuano",
+      "region": "Biobío",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -36.7249,
+      "lon": -73.1168,
+      "variantes": []
+    },
+    {
+      "nombre": "Los Ángeles",
+      "region": "Biobío",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -37.4697,
+      "lon": -72.3537,
+      "variantes": [
+        "Los Angeles"
+      ]
+    },
+    {
+      "nombre": "Temuco",
+      "region": "La Araucanía",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -38.7359,
+      "lon": -72.5904,
+      "variantes": [
+        "Región de La Araucanía",
+        "La Araucania",
+        "Araucanía"
+      ]
+    },
+    {
+      "nombre": "Valdivia",
+      "region": "Los Ríos",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -39.8196,
+      "lon": -73.2452,
+      "variantes": [
+        "Región de Los Ríos",
+        "Los Rios"
+      ]
+    },
+    {
+      "nombre": "Puerto Montt",
+      "region": "Los Lagos",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -41.4693,
+      "lon": -72.9424,
+      "variantes": [
+        "Región de Los Lagos",
+        "Los Lagos"
+      ]
+    },
+    {
+      "nombre": "Osorno",
+      "region": "Los Lagos",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -40.574,
+      "lon": -73.1335,
+      "variantes": []
+    },
+    {
+      "nombre": "Coyhaique",
+      "region": "Aysén",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -45.5752,
+      "lon": -72.0662,
+      "variantes": [
+        "Coihaique",
+        "Región de Aysén",
+        "Aysen",
+        "Aysén"
+      ]
+    },
+    {
+      "nombre": "Punta Arenas",
+      "region": "Magallanes",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -53.1638,
+      "lon": -70.9171,
+      "variantes": [
+        "Región de Magallanes",
+        "Magallanes"
+      ]
+    },
+    {
+      "nombre": "Puerto Natales",
+      "region": "Magallanes",
+      "pais": "Chile",
+      "nivel": "ciudad",
+      "lat": -51.7262,
+      "lon": -72.506,
+      "variantes": []
+    }
+  ],
+  "schema_version": 2
+}
