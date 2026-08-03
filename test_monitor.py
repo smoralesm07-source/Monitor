@@ -87,11 +87,7 @@ class MonitorUAFV7Tests(unittest.TestCase):
         ):
             self.assertIn(dominio, dominios)
 
-        self.assertIn(
-    "uaf.cl",
-    set(M.DOMINIOS_EXCLUIDOS_PUBLICACION),
-    "El portal institucional uaf.cl debe excluirse de las publicaciones del monitor.",
-)
+        self.assertNotIn("uaf.cl", set(M.DOMINIOS_EXCLUIDOS_PUBLICACION))
 
     def test_contexto_laft_sin_uaf(self):
         reg = {
