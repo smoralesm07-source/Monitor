@@ -1,0 +1,392 @@
+name: Actualizar y publicar monitor UAF
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+    - cron: "22 7 * * *"
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "Tipo de ejecución"
+        type: choice
+        required: true
+        default: rapido
+        options: [rapido, conciliacion]
+      reiniciar_estado:
+        description: "Ignorar el histórico guardado y partir de cero"
+        type: boolean
+        default: false
+      probar_correo:
+        description: "Enviar solo un correo de prueba"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monitor-uaf
+  cancel-in-progress: false
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+    permissions:
+      contents: write
+    env:
+      PYTHONUNBUFFERED: "1"
+      # Valor seguro para evitar variables no definidas si una etapa previa falla.
+      MODO: "rapido"
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements_entidades.txt
+
+      - name: Verificar estructura antes del barrido
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "Directorio actual: $(pwd)"
+          echo "Archivos disponibles:"
+          find . -maxdepth 3 -type f | sort
+          for archivo in monitor_uaf.py test_monitor.py construye_sitio.py index.html fuentes_uaf.json semillas_verificadas.json auditoria.html modulo_entidades.py test_modulo_entidades.py entidades_config.json entidades.html requirements_entidades.txt; do
+            if [[ ! -f "$archivo" ]]; then
+              echo "::error title=Archivo faltante::$archivo debe estar en la raíz del repositorio"
+              exit 2
+            fi
+          done
+
+      - name: Instalar reconocimiento de entidades
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Actualiza herramientas de instalación y usa versiones compatibles.
+          python3 -m pip install --disable-pip-version-check --upgrade pip setuptools wheel
+          python3 -m pip install --disable-pip-version-check -r requirements_entidades.txt
+          python3 -m pip check
+
+          # Verifica explícitamente las dependencias que causaron la falla anterior.
+          python3 - <<'PY'
+          import click
+          import spacy
+          import typer
+          print("spaCy:", spacy.__version__)
+          print("Typer:", typer.__version__)
+          print("Click:", click.__version__ if hasattr(click, "__version__") else "instalado")
+          PY
+
+          # Instala directamente el modelo oficial compatible con spaCy 3.8.
+          # Se evita depender del comando `python -m spacy download`.
+          MODELO_URL="https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl"
+
+          if python3 -c "import es_core_news_sm" 2>/dev/null; then
+            echo "Modelo es_core_news_sm ya disponible."
+          elif python3 -m pip install --disable-pip-version-check "$MODELO_URL"; then
+            echo "Modelo es_core_news_sm instalado correctamente."
+          else
+            echo "::warning title=Modelo estadístico no descargado::El módulo continuará con spaCy en blanco, EntityRuler y reglas locales."
+          fi
+
+          # Si el modelo quedó instalado, valida la modalidad híbrida.
+          # Si no, valida expresamente el respaldo basado en reglas.
+          if python3 -c "import es_core_news_sm" 2>/dev/null; then
+            python3 modulo_entidades.py --validar
+          else
+            python3 modulo_entidades.py --validar --solo-reglas
+          fi
+
+          # Verifica que la configuración efectiva incluya la capa relacional v2.
+          python3 - <<'PY'
+          from pathlib import Path
+          import modulo_entidades as E
+          c = E.carga_config(Path("entidades_config.json"))
+          assert len(c.get("relaciones", [])) >= 11, "Faltan reglas relacionales"
+          assert len(c.get("lugares", [])) >= 30, "Falta catálogo territorial"
+          print(
+              "Configuración relacional efectiva:",
+              f"relaciones={len(c['relaciones'])}",
+              f"lugares={len(c['lugares'])}",
+              f"archivo={c.get('config_archivo_version')}",
+              f"completada={c.get('config_completada_internamente')}",
+          )
+          PY
+
+      - name: Determinar modo y presupuesto
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODO="${MODO:-rapido}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            MODO="${{ inputs.modo }}"
+          elif [[ "${{ github.event.schedule }}" == "22 7 * * *" ]]; then
+            MODO="conciliacion"
+          else
+            MODO="rapido"
+          fi
+          echo "MODO=$MODO" >> "$GITHUB_ENV"
+          if [[ "$MODO" == "conciliacion" ]]; then
+            echo "MONITOR_PRESUPUESTO_SEG=2400" >> "$GITHUB_ENV"
+            echo "MONITOR_HILOS=8" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_ENRIQUECER=900" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_ENRIQUECER_CONCILIACION=900" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_SITE_QUERIES=120" >> "$GITHUB_ENV"
+            echo "MONITOR_BARRIDO_MIN_FUENTE=6" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_SITEMAPS_FUENTE=10" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_URLS_SITEMAP=550" >> "$GITHUB_ENV"
+          else
+            echo "MONITOR_PRESUPUESTO_SEG=900" >> "$GITHUB_ENV"
+            echo "MONITOR_HILOS=8" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_ENRIQUECER=240" >> "$GITHUB_ENV"
+            echo "MONITOR_MAX_SITE_QUERIES=32" >> "$GITHUB_ENV"
+            echo "MONITOR_BARRIDO_MIN_FUENTE=2" >> "$GITHUB_ENV"
+            echo "MONITOR_FUENTES_ROTACION=12" >> "$GITHUB_ENV"
+          fi
+          echo "MONITOR_DIAS_PROCESADOS=45" >> "$GITHUB_ENV"
+          echo "MONITOR_RESPETA_ROBOTS=true" >> "$GITHUB_ENV"
+          echo "MONITOR_DASHBOARD_SOLO_UAF=true" >> "$GITHUB_ENV"
+          echo "Ejecución seleccionada: $MODO"
+
+      - name: Restaurar histórico desde monitor-state
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.reiniciar_estado != true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git clone --quiet --depth 1 --branch monitor-state \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" estado_previo; then
+            [[ -f estado_previo/datos.json ]] && cp estado_previo/datos.json datos.json || true
+            [[ -f estado_previo/.monitor_estado.json ]] && cp estado_previo/.monitor_estado.json .monitor_estado.json || true
+            echo "Histórico restaurado."
+          else
+            echo "Sin rama monitor-state: primera ejecución."
+          fi
+          rm -rf estado_previo
+
+      - name: Validación completa del motor y catálogo
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '22 7 * * *' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -m unittest -v test_monitor.py test_modulo_entidades.py 2>&1 | tee validacion.log
+          python3 -u monitor_uaf.py --validar-fuentes 2>&1 | tee -a validacion.log
+
+      - name: Validación rápida programada
+        if: ${{ github.event_name == 'schedule' && github.event.schedule != '22 7 * * *' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -m py_compile monitor_uaf.py modulo_entidades.py construye_sitio.py 2>&1 | tee validacion.log
+          python3 -u monitor_uaf.py --validar-fuentes 2>&1 | tee -a validacion.log
+
+      - name: Probar correo
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.probar_correo == true }}
+        env:
+          MONITOR_CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
+          MONITOR_SMTP_SERVIDOR: ${{ secrets.MONITOR_SMTP_SERVIDOR }}
+          MONITOR_SMTP_PUERTO: ${{ secrets.MONITOR_SMTP_PUERTO }}
+          MONITOR_SMTP_SEGURIDAD: ${{ secrets.MONITOR_SMTP_SEGURIDAD }}
+          MONITOR_SMTP_USUARIO: ${{ secrets.MONITOR_SMTP_USUARIO }}
+          MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
+          MONITOR_DESTINATARIOS: ${{ vars.MONITOR_DESTINATARIOS || secrets.MONITOR_DESTINATARIOS }}
+          MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -u monitor_uaf.py --probar-correo 2>&1 | tee monitor.log
+
+      - name: Validar configuración de destinatarios
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+        env:
+          CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
+          DESTINATARIOS: ${{ vars.MONITOR_DESTINATARIOS || secrets.MONITOR_DESTINATARIOS }}
+        shell: bash
+        run: |
+          if [[ "${CORREO_ACTIVO,,}" == "true" ]]; then
+            if [[ -z "$DESTINATARIOS" ]]; then
+              echo "::warning title=Correo sin destinatarios::MONITOR_DESTINATARIOS está vacío; el dashboard se actualizará, pero no habrá avisos."
+            else
+              CANTIDAD=$(python3 - <<'PY'
+          import os
+          print(len([x for x in os.environ.get("DESTINATARIOS", "").split(",") if x.strip()]))
+          PY
+              )
+              echo "Correo activo; destinatarios configurados: $CANTIDAD"
+            fi
+          else
+            echo "Correo automático desactivado."
+          fi
+
+      - name: Ejecutar monitor
+        id: ejecutar_monitor
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+        env:
+          MONITOR_CORREO_ACTIVO: ${{ secrets.MONITOR_CORREO_ACTIVO }}
+          MONITOR_SMTP_SERVIDOR: ${{ secrets.MONITOR_SMTP_SERVIDOR }}
+          MONITOR_SMTP_PUERTO: ${{ secrets.MONITOR_SMTP_PUERTO }}
+          MONITOR_SMTP_SEGURIDAD: ${{ secrets.MONITOR_SMTP_SEGURIDAD }}
+          MONITOR_SMTP_USUARIO: ${{ secrets.MONITOR_SMTP_USUARIO }}
+          MONITOR_SMTP_CLAVE: ${{ secrets.MONITOR_SMTP_CLAVE }}
+          MONITOR_DESTINATARIOS: ${{ vars.MONITOR_DESTINATARIOS || secrets.MONITOR_DESTINATARIOS }}
+          MONITOR_REMITENTE_NOMBRE: ${{ secrets.MONITOR_REMITENTE_NOMBRE }}
+          MONITOR_MINIMO_AVISO: ${{ secrets.MONITOR_MINIMO_AVISO }}
+          MONITOR_SILENCIO_MINUTOS: ${{ secrets.MONITOR_SILENCIO_MINUTOS }}
+          MONITOR_SOLO_UAF: ${{ secrets.MONITOR_SOLO_UAF }}
+          MONITOR_CORREO_CONCILIACION: ${{ vars.MONITOR_CORREO_CONCILIACION }}
+          MONITOR_CORREO_CONCILIACION_HORAS: ${{ vars.MONITOR_CORREO_CONCILIACION_HORAS }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -u monitor_uaf.py --modo "$MODO" 2>&1 | tee monitor.log
+
+      - name: Comprobar salida del monitor
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s datos.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('datos.json')
+          d = json.loads(p.read_text(encoding='utf-8'))
+          print('datos.json:', p.stat().st_size, 'bytes')
+          print('versión:', d.get('version_motor'))
+          print('modo:', d.get('modo_ejecucion'))
+          print('publicaciones:', len(d.get('prensa', [])))
+          print('auditoría:', d.get('auditoria', {}))
+
+          import monitor_uaf as m
+          actuales = {m.url_canonica(x.get('link', '')) for x in d.get('prensa', [])}
+          excluidas = [x for x in d.get('prensa', []) if m.dominio_url(x.get('link', '')) == 'uaf.cl']
+          if excluidas:
+              raise SystemExit(f'El dashboard todavía contiene {len(excluidas)} publicaciones de uaf.cl')
+          esperadas = {m.url_canonica(x.get('link', '')) for x in m.descubre_semillas_verificadas()}
+          faltantes = sorted(esperadas - actuales)
+          print('semillas activas esperadas:', len(esperadas))
+          print('semillas faltantes:', len(faltantes))
+          if faltantes:
+              print('\n'.join(faltantes[:30]))
+              raise SystemExit('Faltan publicaciones verificadas en datos.json')
+          PY
+
+      - name: Enriquecer publicaciones con entidades
+        id: enriquecer_entidades
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -u modulo_entidades.py --entrada datos.json --salida datos.json 2>&1 | tee entidades.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path('datos.json').read_text(encoding='utf-8'))
+          m = d.get('modulo_entidades') or {}
+          a = d.get('analisis_entidades') or {}
+          print('módulo:', m.get('version'))
+          print('modelo:', m.get('modelo'))
+          print('publicaciones procesadas:', m.get('publicaciones_procesadas'))
+          print('entidades únicas:', m.get('entidades_unicas'))
+          print('relaciones explícitas:', a.get('relaciones_explicitas'))
+          print('relaciones totales:', a.get('relaciones_totales'))
+          print('casos/eventos:', len(a.get('casos', [])))
+          print('territorios:', len(a.get('lugares', [])))
+          if not m.get('version'):
+              raise SystemExit('El módulo de entidades no dejó metadatos en datos.json')
+          if not a.get('version'):
+              raise SystemExit('No se generó el bloque analisis_entidades en datos.json')
+          if not isinstance(a.get('relaciones'), list):
+              raise SystemExit('analisis_entidades.relaciones no es una lista')
+          PY
+
+      - name: Construir sitio estático
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+        run: python3 -u construye_sitio.py
+
+      - name: Subir artefacto de Pages
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Guardar histórico en monitor-state
+        # No se ejecuta tras una falla temprana. Solo guarda un resultado procesado
+        # y enriquecido correctamente.
+        if: ${{ steps.enriquecer_entidades.outcome == 'success' && (github.event_name != 'workflow_dispatch' || inputs.probar_correo != true) }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODO_ESTADO="${MODO:-no-determinado}"
+          [[ -f datos.json ]] || exit 0
+          rm -rf estado_nuevo
+          mkdir estado_nuevo
+          cp datos.json estado_nuevo/
+          [[ -f .monitor_estado.json ]] && cp .monitor_estado.json estado_nuevo/ || true
+          cd estado_nuevo
+          git init --quiet
+          git checkout --quiet -b monitor-state
+          git config user.name "monitor-uaf[bot]"
+          git config user.email "monitor-uaf@users.noreply.github.com"
+          git add -A
+          git commit --quiet -m "Estado ${MODO_ESTADO} $(date -u +%Y-%m-%dT%H:%M:%SZ)" || exit 0
+          if ! git push --quiet --force \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" monitor-state; then
+            echo "::warning title=Histórico no guardado::No se pudo actualizar monitor-state. El dashboard sí puede publicarse."
+          fi
+
+      - name: Mostrar diagnóstico si falla
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          echo "=== Archivos en raíz ==="
+          ls -la
+          echo "=== Últimas líneas de validación ==="
+          tail -n 80 validacion.log 2>/dev/null || true
+          echo "=== Últimas líneas del monitor ==="
+          tail -n 150 monitor.log 2>/dev/null || true
+          echo "=== Últimas líneas del módulo de entidades ==="
+          tail -n 100 entidades.log 2>/dev/null || true
+          echo "=== Tamaños ==="
+          du -h datos.json .monitor_estado.json monitor.log validacion.log entidades.log 2>/dev/null || true
+
+      - name: Adjuntar diagnóstico
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-monitor-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            monitor.log
+            validacion.log
+            entidades.log
+            datos.json
+            .monitor_estado.json
+
+  publicar:
+    needs: actualizar
+    if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.probar_correo != true) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Publicar GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
