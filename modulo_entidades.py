@@ -38,7 +38,21 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, Iterable
 
-VERSION_MODULO = "2.1.1-analisis-relacional-config-autocontenida"
+try:
+    import reconocedor_entidades as REC
+
+    RECONOCEDOR_DISPONIBLE = True
+except Exception as _exc_rec:  # pragma: no cover - degradación controlada
+    REC = None
+    RECONOCEDOR_DISPONIBLE = False
+    print(
+        "::warning title=Reconocedor v3 no disponible::"
+        f"No se pudo importar reconocedor_entidades.py ({type(_exc_rec).__name__}: {_exc_rec}). "
+        "Se usará el reconocimiento heredado v2.",
+        file=sys.stderr,
+    )
+
+VERSION_MODULO = "3.0.0-personas-naturales-y-juridicas"
 BASE = Path(__file__).resolve().parent
 DEFAULT_INPUT = BASE / "datos.json"
 DEFAULT_CONFIG = BASE / "entidades_config.json"
@@ -68,6 +82,8 @@ TIPOS_PUBLICOS = {
     "MONTO": "MONTO",
     "LUGAR": "LUGAR",
     "PERSONA": "PERSONA",
+    "TRIBUNAL": "TRIBUNAL",
+    "ENTIDAD_SIN_FINES_DE_LUCRO": "ENTIDAD_SIN_FINES_DE_LUCRO",
 }
 
 TIPOS_ENTIDAD_RELACIONAL = {
@@ -76,13 +92,49 @@ TIPOS_ENTIDAD_RELACIONAL = {
     "ORGANIZACION",
     "ORGANISMO_PUBLICO",
     "INSTITUCION_FINANCIERA",
+    "TRIBUNAL",
+    "ENTIDAD_SIN_FINES_DE_LUCRO",
 }
+
+# Naturaleza jurídica: eje de clasificación de primer nivel solicitado para la
+# nómina. Persona natural y persona jurídica se separan explícitamente.
+NATURALEZA_POR_TIPO = {
+    "PERSONA": "PERSONA_NATURAL",
+    "EMPRESA": "PERSONA_JURIDICA",
+    "INSTITUCION_FINANCIERA": "PERSONA_JURIDICA",
+    "ORGANISMO_PUBLICO": "PERSONA_JURIDICA",
+    "ORGANIZACION": "PERSONA_JURIDICA",
+    "TRIBUNAL": "PERSONA_JURIDICA",
+    "ENTIDAD_SIN_FINES_DE_LUCRO": "PERSONA_JURIDICA",
+    "LUGAR": "NO_APLICA",
+    "MONTO": "NO_APLICA",
+    "FECHA": "NO_APLICA",
+    "RUT": "NO_APLICA",
+    "CRIPTOACTIVO": "NO_APLICA",
+    "OTRO": "INDETERMINADA",
+}
+
+ETIQUETA_NATURALEZA = {
+    "PERSONA_NATURAL": "Persona natural",
+    "PERSONA_JURIDICA": "Persona jurídica",
+    "NO_APLICA": "No aplica",
+    "INDETERMINADA": "Indeterminada",
+}
+
+
+def naturaleza_de(tipo: Any) -> str:
+    if RECONOCEDOR_DISPONIBLE:
+        return REC.naturaleza_de(tipo)
+    return NATURALEZA_POR_TIPO.get(str(tipo or "").upper(), "INDETERMINADA")
+
 
 TIPOS_PRIORIDAD = {
     "PERSONA": 100,
     "EMPRESA": 95,
     "INSTITUCION_FINANCIERA": 92,
     "ORGANISMO_PUBLICO": 85,
+    "TRIBUNAL": 84,
+    "ENTIDAD_SIN_FINES_DE_LUCRO": 82,
     "ORGANIZACION": 80,
     "LUGAR": 60,
     "CRIPTOACTIVO": 50,
@@ -148,7 +200,7 @@ CONFIG_BASE_INTERNA: dict[str, Any] = {'descripcion': 'Configuración relacional
  'max_relaciones_globales': 4500,
  'batch_size': 16,
  'minimo_caracteres': 3,
- 'incluir_rut': False,
+ 'incluir_rut': True,
  'exclusiones': ['Chile',
                  'Gobierno',
                  'Estado',
@@ -656,6 +708,12 @@ def completa_config(data: dict[str, Any] | None) -> dict[str, Any]:
         or original_lug < len(base.get("lugares", []) or [])
     )
     fusionada["version"] = str(base.get("version", "2.1.1"))
+
+    # El reconocedor v3 aporta bancos, tribunales y organismos ausentes del
+    # diccionario histórico, y habilita los tipos nuevos en las reglas
+    # relacionales ya definidas.
+    if RECONOCEDOR_DISPONIBLE:
+        fusionada = REC.extiende_config(fusionada)
     return fusionada
 
 
@@ -854,6 +912,13 @@ def oracion_para_posicion(oraciones: list[dict[str, Any]], inicio: int, fin: int
 
 
 def extrae_reglas(texto: str, incluir_rut: bool = False) -> list[dict[str, Any]]:
+    """Extracción por reglas. Delega en el reconocedor v3 si está disponible."""
+    if RECONOCEDOR_DISPONIBLE:
+        return REC.extrae_reglas(texto, incluir_rut=incluir_rut)
+    return _extrae_reglas_heredado(texto, incluir_rut)
+
+
+def _extrae_reglas_heredado(texto: str, incluir_rut: bool = False) -> list[dict[str, Any]]:
     hallazgos: list[dict[str, Any]] = []
     for match in EMPRESA_RE.finditer(texto):
         nombre = limpia_nombre(match.group(0))
@@ -942,6 +1007,69 @@ def canoniza(
     return nombre, tipo, False, None
 
 
+def _fusiona_correferencias(
+    entidades: list[dict[str, Any]],
+    menciones: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Unifica entidades correferentes conservando la traza de cada variante."""
+    mapa = REC.agrupa_correferencias(entidades)
+    if not mapa:
+        return entidades, menciones
+
+    por_id = {e["id"]: e for e in entidades}
+    absorbidas: set[str] = set()
+    for id_origen, destino in mapa.items():
+        id_destino = destino.get("id_canonico")
+        if not id_destino or id_destino == id_origen:
+            continue
+        origen_e, destino_e = por_id.get(id_origen), por_id.get(id_destino)
+        if not origen_e or not destino_e:
+            continue
+        destino_e["menciones"] += int(origen_e.get("menciones", 0) or 0)
+        destino_e["variantes"] = sorted(
+            set(destino_e.get("variantes", [])) | set(origen_e.get("variantes", [])),
+            key=lambda x: (-len(x), x.casefold()),
+        )
+        destino_e["origen_deteccion"] = sorted(
+            set(destino_e.get("origen_deteccion", [])) | set(origen_e.get("origen_deteccion", []))
+        )
+        destino_e["campos"] = sorted(
+            set(destino_e.get("campos", [])) | set(origen_e.get("campos", []))
+        )
+        destino_e["senales"] = sorted(
+            set(destino_e.get("senales", []))
+            | set(origen_e.get("senales", []))
+            | {f"correferencia:{destino.get('motivo')}"}
+        )
+        destino_e["confianza_score"] = round(max(
+            float(destino_e.get("confianza_score", 0.5)),
+            float(origen_e.get("confianza_score", 0.5)),
+        ), 3)
+        for rol in origen_e.get("roles", []):
+            if rol not in destino_e.get("roles", []):
+                destino_e.setdefault("roles", []).append(rol)
+        for ctx in origen_e.get("contextos", []):
+            if ctx not in destino_e.get("contextos", []) and len(destino_e.get("contextos", [])) < 6:
+                destino_e.setdefault("contextos", []).append(ctx)
+        for rut in origen_e.get("ruts", []):
+            if rut not in destino_e.get("ruts", []):
+                destino_e.setdefault("ruts", []).append(rut)
+        destino_e.setdefault("formas_unificadas", []).append({
+            "variante": origen_e.get("nombre_canonico"),
+            "id_previo": id_origen,
+            "motivo": destino.get("motivo"),
+        })
+        absorbidas.add(id_origen)
+
+    for mencion in menciones:
+        destino = mapa.get(mencion.get("entidad_id"))
+        if destino and destino.get("id_canonico"):
+            mencion["entidad_id_original"] = mencion["entidad_id"]
+            mencion["entidad_id"] = destino["id_canonico"]
+
+    return [e for e in entidades if e["id"] not in absorbidas], menciones
+
+
 def procesa_publicacion(
     registro: dict[str, Any],
     doc: Any,
@@ -957,41 +1085,73 @@ def procesa_publicacion(
 
     candidatos: list[dict[str, Any]] = []
     for ent in getattr(doc, "ents", []):
-        tipo = TIPOS_PUBLICOS.get(str(ent.label_).upper(), "OTRO")
+        etiqueta_cruda = str(ent.label_).upper()
+        tipo = TIPOS_PUBLICOS.get(etiqueta_cruda, "OTRO")
         if tipo == "OTRO":
             continue
-        origen = "diccionario_institucional" if getattr(ent, "ent_id_", "") else "modelo_estadistico"
-        candidatos.append({
+        por_diccionario = bool(getattr(ent, "ent_id_", ""))
+        origen = "diccionario_institucional" if por_diccionario else "modelo_estadistico"
+        cand = {
             "texto": limpia_nombre(ent.text), "label": tipo,
+            "naturaleza": naturaleza_de(tipo),
             "inicio": int(ent.start_char), "fin": int(ent.end_char), "origen": origen,
-        })
-    candidatos.extend(extrae_reglas(texto, bool(config.get("incluir_rut", False))))
+            "score": 0.9 if por_diccionario else 0.6,
+        }
+        # El diccionario institucional es autoritativo; la salida del modelo
+        # estadístico se somete al arbitraje léxico del reconocedor v3, que es
+        # quien decide si la cadena es persona natural, jurídica o ruido.
+        if RECONOCEDOR_DISPONIBLE and not por_diccionario:
+            # El modelo estadístico también produce spans que cruzan el fin de
+            # oración ("… Fondos S.A. Los hermanos Ariel"); se recortan igual
+            # que los de las reglas.
+            cand["inicio"], cand["fin"] = REC.recorta_span(
+                texto, cand["inicio"], cand["fin"]
+            )
+            cand["texto"] = texto[cand["inicio"]:cand["fin"]]
+            izq = texto[max(0, cand["inicio"] - REC.VENTANA_CONTEXTO):cand["inicio"]]
+            der = texto[cand["fin"]:cand["fin"] + REC.VENTANA_CONTEXTO]
+            veredicto = REC.clasifica_cadena(cand["texto"], etiqueta_cruda, izq, der)
+            if veredicto["descartar"]:
+                continue
+            cand["texto"] = REC.canoniza_denominacion(cand["texto"])[0]
+            cand["label"] = veredicto["tipo"]
+            cand["naturaleza"] = veredicto["naturaleza"]
+            cand["score"] = veredicto["score"]
+            cand["senales"] = veredicto["senales"]
+            cand["motivo"] = veredicto["motivo"]
+        candidatos.append(cand)
 
-    # Elimina detecciones parciales superpuestas, por ejemplo
-    # "Inversiones Costa Sur" cuando también se detectó
-    # "Inversiones Costa Sur SpA" en el mismo tramo.
-    depurados: list[dict[str, Any]] = []
-    for cand in sorted(
-        candidatos,
-        key=lambda x: (int(x.get("inicio", 0)), -int(x.get("fin", 0)) + int(x.get("inicio", 0))),
-    ):
-        inicio = int(cand.get("inicio", 0))
-        fin = int(cand.get("fin", inicio))
-        tipo = TIPOS_PUBLICOS.get(str(cand.get("label", "")).upper(), str(cand.get("label", "OTRO")).upper())
-        texto_cand = normaliza(cand.get("texto", ""))
-        redundante = False
-        for previo in depurados:
-            pi, pf = int(previo.get("inicio", 0)), int(previo.get("fin", 0))
-            p_tipo = TIPOS_PUBLICOS.get(str(previo.get("label", "")).upper(), str(previo.get("label", "OTRO")).upper())
-            p_texto = normaliza(previo.get("texto", ""))
-            solapa = inicio < pf and fin > pi
-            compatibles = {tipo, p_tipo} <= {"EMPRESA", "ORGANIZACION", "INSTITUCION_FINANCIERA"}
-            if solapa and compatibles and (texto_cand in p_texto or p_texto in texto_cand):
-                redundante = True
-                break
-        if not redundante:
-            depurados.append(cand)
-    candidatos = depurados
+    candidatos.extend(extrae_reglas(texto, bool(config.get("incluir_rut", True))))
+
+    if RECONOCEDOR_DISPONIBLE:
+        # Arbitraje único de solapamientos para todos los tipos. Impide que una
+        # misma cadena quede simultáneamente como PERSONA y como EMPRESA.
+        candidatos = REC.depura_candidatos(candidatos)
+        REC.rut_por_proximidad(texto, candidatos)
+        candidatos = [c for c in candidatos if str(c.get("label", "")).upper() != "RUT"]
+    else:
+        depurados: list[dict[str, Any]] = []
+        for cand in sorted(
+            candidatos,
+            key=lambda x: (int(x.get("inicio", 0)), -int(x.get("fin", 0)) + int(x.get("inicio", 0))),
+        ):
+            inicio = int(cand.get("inicio", 0))
+            fin = int(cand.get("fin", inicio))
+            tipo = TIPOS_PUBLICOS.get(str(cand.get("label", "")).upper(), str(cand.get("label", "OTRO")).upper())
+            texto_cand = normaliza(cand.get("texto", ""))
+            redundante = False
+            for previo in depurados:
+                pi, pf = int(previo.get("inicio", 0)), int(previo.get("fin", 0))
+                p_tipo = TIPOS_PUBLICOS.get(str(previo.get("label", "")).upper(), str(previo.get("label", "OTRO")).upper())
+                p_texto = normaliza(previo.get("texto", ""))
+                solapa = inicio < pf and fin > pi
+                compatibles = {tipo, p_tipo} <= {"EMPRESA", "ORGANIZACION", "INSTITUCION_FINANCIERA"}
+                if solapa and compatibles and (texto_cand in p_texto or p_texto in texto_cand):
+                    redundante = True
+                    break
+            if not redundante:
+                depurados.append(cand)
+        candidatos = depurados
 
     agrupadas: dict[tuple[str, str], dict[str, Any]] = {}
     menciones: list[dict[str, Any]] = []
@@ -1032,6 +1192,8 @@ def procesa_publicacion(
             "id": eid,
             "nombre_canonico": canonico,
             "tipo": tipo,
+            "naturaleza": naturaleza_de(tipo),
+            "naturaleza_label": ETIQUETA_NATURALEZA.get(naturaleza_de(tipo), "Indeterminada"),
             "variantes": set(),
             "origen_deteccion": set(),
             "menciones": 0,
@@ -1040,8 +1202,24 @@ def procesa_publicacion(
             "contextos": [],
             "menciones_detalle": [],
             "confianza": "alta" if por_alias or str(cand.get("origen", "")).startswith("regla_") else "media",
+            "confianza_score": 0.0,
+            "senales": set(),
+            "ruts": [],
             "geo": geo,
         })
+        # El score de la entidad es el máximo observado entre sus menciones:
+        # basta una aparición inequívoca para consolidar la identificación.
+        item["confianza_score"] = max(
+            float(item.get("confianza_score", 0.0)), float(cand.get("score", 0.5) or 0.5)
+        )
+        for senal in cand.get("senales", []) or []:
+            item["senales"].add(str(senal))
+        for rut in cand.get("ruts", []) or []:
+            if rut not in item["ruts"]:
+                item["ruts"].append(rut)
+        if por_alias:
+            item["senales"].add("diccionario_institucional")
+            item["confianza_score"] = max(float(item["confianza_score"]), 0.95)
         item["menciones"] += 1
         item["variantes"].add(original)
         item["origen_deteccion"].add(mention["origen"])
@@ -1059,13 +1237,19 @@ def procesa_publicacion(
             item["confianza"] = "alta"
 
     salida: list[dict[str, Any]] = []
-    ids_permitidos: set[str] = set()
     for item in agrupadas.values():
         item["origen_deteccion"] = sorted(item["origen_deteccion"])
         item["variantes"] = sorted(item["variantes"], key=lambda x: (-len(x), x.casefold()))
         item["roles"] = list(item["roles"].values())
         item["campos"] = sorted(item["campos"])
+        item["senales"] = sorted(item["senales"])
+        item["confianza_score"] = round(float(item.get("confianza_score", 0.5)), 3)
         salida.append(item)
+
+    # Correferencia: "Marcela Ortiz" y "Marcela Ortiz Vega" son la misma persona.
+    if RECONOCEDOR_DISPONIBLE:
+        salida, menciones = _fusiona_correferencias(salida, menciones)
+
     salida.sort(key=lambda x: (
         -TIPOS_PRIORIDAD.get(x["tipo"], 0),
         -int(x["menciones"]),
@@ -1372,10 +1556,24 @@ def construye_nomina_publicacion(
         roles_publicos = roles_relacionales or roles
         rol_principal = roles_publicos[0] if roles_publicos else "mencionada en la publicación"
 
+        tipo_entidad = entidad.get("tipo") or "OTRO"
+        naturaleza = entidad.get("naturaleza") or naturaleza_de(tipo_entidad)
         nomina.append({
             "entidad_id": eid,
             "nombre": entidad.get("nombre_canonico") or eid,
-            "tipo": entidad.get("tipo") or "OTRO",
+            "tipo": tipo_entidad,
+            "naturaleza": naturaleza,
+            "naturaleza_label": ETIQUETA_NATURALEZA.get(naturaleza, "Indeterminada"),
+            "confianza_score": round(float(entidad.get("confianza_score", 0.5) or 0.5), 3),
+            "senales": list(entidad.get("senales", []))[:12],
+            "ruts": list(entidad.get("ruts", [])),
+            "variantes": list(entidad.get("variantes", []))[:6],
+            "formas_unificadas": [
+                x.get("variante") for x in entidad.get("formas_unificadas", [])
+            ],
+            "requiere_validacion": bool(
+                float(entidad.get("confianza_score", 0.5) or 0.5) < 0.55
+            ),
             "rol_principal": rol_principal,
             "roles": roles_publicos,
             "relaciones_explicitas": relaciones,
@@ -1397,9 +1595,17 @@ def construye_nomina_publicacion(
         })
 
     prioridad = {"PERSONA": 0, "EMPRESA": 1, "INSTITUCION_FINANCIERA": 2,
-                 "ORGANISMO_PUBLICO": 3, "ORGANIZACION": 4, "CRIPTOACTIVO": 5,
-                 "LUGAR": 6, "OTRO": 7}
-    nomina.sort(key=lambda x: (prioridad.get(x["tipo"], 8), x["nombre"].casefold()))
+                 "ORGANISMO_PUBLICO": 3, "TRIBUNAL": 4,
+                 "ENTIDAD_SIN_FINES_DE_LUCRO": 5, "ORGANIZACION": 6,
+                 "CRIPTOACTIVO": 7, "LUGAR": 8, "OTRO": 9}
+    orden_naturaleza = {"PERSONA_NATURAL": 0, "PERSONA_JURIDICA": 1,
+                        "INDETERMINADA": 2, "NO_APLICA": 3}
+    nomina.sort(key=lambda x: (
+        orden_naturaleza.get(x.get("naturaleza", "INDETERMINADA"), 4),
+        prioridad.get(x["tipo"], 9),
+        -float(x.get("confianza_score", 0) or 0),
+        x["nombre"].casefold(),
+    ))
     return nomina
 
 
@@ -1766,6 +1972,13 @@ def enriquecer(
                     "tipo_nodo": "ENTIDAD",
                     "nombre": e["nombre_canonico"],
                     "tipo": e["tipo"],
+                    "naturaleza": e.get("naturaleza") or naturaleza_de(e["tipo"]),
+                    "naturaleza_label": ETIQUETA_NATURALEZA.get(
+                        e.get("naturaleza") or naturaleza_de(e["tipo"]), "Indeterminada"
+                    ),
+                    "confianza_score": 0.0,
+                    "senales": set(),
+                    "ruts": [],
                     "variantes": set(),
                     "origen_deteccion": set(),
                     "publicaciones": 0,
@@ -1785,6 +1998,14 @@ def enriquecer(
                 })
                 global_e["variantes"].update(e.get("variantes", []))
                 global_e["origen_deteccion"].update(e.get("origen_deteccion", []))
+                global_e["senales"].update(e.get("senales", []))
+                global_e["confianza_score"] = max(
+                    float(global_e.get("confianza_score", 0.0)),
+                    float(e.get("confianza_score", 0.5) or 0.5),
+                )
+                for rut in e.get("ruts", []) or []:
+                    if rut not in global_e["ruts"]:
+                        global_e["ruts"].append(rut)
                 global_e["publicaciones"] += 1
                 global_e["menciones"] += int(e.get("menciones", 1) or 1)
                 if art_node_id not in global_e["articulos"]:
@@ -1908,6 +2129,9 @@ def enriquecer(
         e["medios"] = sorted(e["medios"])
         e["cantidad_medios"] = len(e["medios"])
         e["roles"] = [{"rol": r, "apariciones": n} for r, n in e["roles"].most_common(8)]
+        e["senales"] = sorted(e["senales"])[:15]
+        e["confianza_score"] = round(float(e.get("confianza_score", 0.5)), 3)
+        e["requiere_validacion"] = bool(e["confianza_score"] < 0.55)
         for campo in ("fenomenos", "precedentes", "sectores", "topicos", "lugares"):
             e[campo] = [{"id": k, "articulos": n} for k, n in e[campo].most_common()]
         entidades_final.append(e)
@@ -1938,7 +2162,8 @@ def enriquecer(
     nodos = []
     nodos.extend({
         "id": e["id"], "tipo_nodo": "ENTIDAD", "nombre": e["nombre"],
-        "subtipo": e["tipo"], "score": e.get("score_relacional", 0),
+        "subtipo": e["tipo"], "naturaleza": e.get("naturaleza", "INDETERMINADA"),
+        "score": e.get("score_relacional", 0),
     } for e in entidades_final)
     nodos.extend({
         "id": a["id"], "tipo_nodo": "ARTICULO", "nombre": a["titulo"],
@@ -1956,6 +2181,12 @@ def enriquecer(
 
     ahora = datetime.now(timezone.utc).isoformat()
     por_tipo = Counter(e.get("tipo", "OTRO") for e in entidades_final)
+    por_naturaleza = Counter(
+        e.get("naturaleza", "INDETERMINADA") for e in entidades_final
+    )
+    pendientes_validacion = sum(
+        1 for e in entidades_final if e.get("requiere_validacion")
+    )
     explicitas = sum(1 for r in relaciones if r["categoria"] == "explicita")
 
     analisis = {
@@ -1977,6 +2208,13 @@ def enriquecer(
         "nodos": nodos,
         "relaciones": relaciones,
         "conteo_por_tipo": dict(sorted(por_tipo.items())),
+        "conteo_por_naturaleza": dict(sorted(por_naturaleza.items())),
+        "personas_naturales": por_naturaleza.get("PERSONA_NATURAL", 0),
+        "personas_juridicas": por_naturaleza.get("PERSONA_JURIDICA", 0),
+        "entidades_por_validar": pendientes_validacion,
+        "reconocedor": (
+            REC.VERSION_RECONOCEDOR if RECONOCEDOR_DISPONIBLE else "heredado_v2"
+        ),
         "errores": errores[:30],
         "advertencia": (
             "Las relaciones explícitas se infieren desde frases del artículo y deben validarse. "
@@ -2043,10 +2281,18 @@ def main(argv: Iterable[str] | None = None) -> int:
     print(
         "Análisis relacional listo: "
         f"{meta['publicaciones_procesadas']} publicaciones · "
-        f"{meta['entidades_unicas']} entidades · "
+        f"{meta['entidades_unicas']} entidades "
+        f"({meta.get('personas_naturales', 0)} personas naturales, "
+        f"{meta.get('personas_juridicas', 0)} personas jurídicas) · "
         f"{meta['relaciones_explicitas']} relaciones explícitas · "
-        f"{len(meta['casos'])} casos/eventos · modelo={meta['modelo']}"
+        f"{len(meta['casos'])} casos/eventos · modelo={meta['modelo']} · "
+        f"reconocedor={meta.get('reconocedor', 'heredado_v2')}"
     )
+    if meta.get("entidades_por_validar"):
+        print(
+            f"  {meta['entidades_por_validar']} entidades quedaron bajo el umbral "
+            "de confianza y están marcadas para validación humana."
+        )
     return 0
 
 

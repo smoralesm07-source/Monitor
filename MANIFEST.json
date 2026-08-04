@@ -1,0 +1,58 @@
+{
+  ".github/workflows/monitor.yml": {
+    "bytes": 17221,
+    "sha256": "6ecae9c3771d086aad593737ba8f22e8e6d14cbbc8da35fbf39d99780ba8860d"
+  },
+  "CAMBIOS_V3.md": {
+    "bytes": 6486,
+    "sha256": "7077a68e3c19e024589ad6a8476de8c95737f9cf712bfccbad12da1c24ee2769"
+  },
+  "INSTRUCCIONES_INSTALACION.txt": {
+    "bytes": 2944,
+    "sha256": "1a1948c495a5b941d4beccbad1f6e48b8666409926b8c5c6e6ee6b77612bce4f"
+  },
+  "benchmark_entidades.py": {
+    "bytes": 6890,
+    "sha256": "e230ec7cdc9708d8b53513fea562e30379f475a68ea92bf2deb08594fbb7326c"
+  },
+  "construye_sitio.py": {
+    "bytes": 9321,
+    "sha256": "d8679555fab663e9b3f708bd908dc34cee370eff2559baefb9d091b5b32ef65b"
+  },
+  "corpus_holdout.json": {
+    "bytes": 1310,
+    "sha256": "42b336e5bad7ef030c3cfe02c74628503d987fefd4e0172f396e1eb32cbd819c"
+  },
+  "corpus_prueba.json": {
+    "bytes": 4238,
+    "sha256": "42a31e63d340de1171e9fd21db15a56264ca72ba7f70401f0bac50ff255f6b04"
+  },
+  "entidades.html": {
+    "bytes": 45936,
+    "sha256": "32a4b5f42ff42779f0cff659349c39fc737a6700aa43f15441a48ff374061942"
+  },
+  "entidades_config.json": {
+    "bytes": 19148,
+    "sha256": "7139f96e22877dc38e1f7b31f1bfa919956da2ecab516b4efb2d288242993eb4"
+  },
+  "modulo_entidades.py": {
+    "bytes": 100034,
+    "sha256": "dd7202dac355face7e7646b49d3b3fbf838555a587ff3bd3648db4c6d09dec35"
+  },
+  "reconocedor_entidades.py": {
+    "bytes": 63727,
+    "sha256": "a3a52c2c16827c130494eed757030aad76c028887365dcdc5919a8493e1d39ce"
+  },
+  "requirements_entidades.txt": {
+    "bytes": 471,
+    "sha256": "2d0f439f2774f24a05781198f7b9761d43098812642c1c025f5b81a589053963"
+  },
+  "test_modulo_entidades.py": {
+    "bytes": 9641,
+    "sha256": "e109cc0c766dd6d1b523026d44ebed972a0a03c2e7755ce5519cb429f73fd9a1"
+  },
+  "test_reconocedor_entidades.py": {
+    "bytes": 8911,
+    "sha256": "3f3b5d65e2a60de63a3496236c7955749b610c357d9d98918f80909118dce475"
+  }
+}

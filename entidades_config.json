@@ -1,13 +1,13 @@
 {
-  "descripcion": "Configuración relacional LA/FT con entidades, relaciones explícitas, roles y geografía de Chile.",
-  "version": "2.1.1",
+  "descripcion": "Configuración relacional LA/FT. El reconocedor v3 clasifica personas naturales y jurídicas y valida los RUT con módulo 11, por lo que incluir_rut deja de ser una fuente de ruido.",
+  "version": "3.0.0",
   "modelo_recomendado": "es_core_news_sm",
   "max_texto_por_publicacion": 40000,
   "max_entidades_por_publicacion": 60,
   "max_relaciones_globales": 4500,
   "batch_size": 16,
   "minimo_caracteres": 3,
-  "incluir_rut": false,
+  "incluir_rut": true,
   "exclusiones": [
     "Chile",
     "Gobierno",

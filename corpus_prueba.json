@@ -1,0 +1,57 @@
+{
+  "version_motor": "diagnostico",
+  "prensa": [
+    {
+      "id": "t1",
+      "titulo": "Fiscalía Oriente formaliza a Rodrigo Andrés Pizarro Meza por lavado de activos",
+      "resumen": "El Ministerio Público formalizó a Rodrigo Andrés Pizarro Meza y a su hermano Cristián Pizarro Meza por lavado de activos. Ambos son socios de Comercializadora Andes Sur SpA.",
+      "texto_enriquecido": "El fiscal jefe de Las Condes, Manuel Guerra Fuenzalida, sostuvo la audiencia en el 8° Juzgado de Garantía de Santiago. La defensa estuvo a cargo del abogado Juan Pablo Hermosilla. Según la investigación, Inversiones Del Valle Limitada habría recibido transferencias desde Comercializadora Andes Sur SpA por más de $2.500 millones. La Unidad de Análisis Financiero remitió un reporte de operación sospechosa al Ministerio Público. También aparece mencionada la sociedad Agrícola El Peumo Ltda. y el Banco de Chile.",
+      "medio": "La Tercera",
+      "fecha": "2026-07-15",
+      "link": "https://ejemplo.cl/t1",
+      "fenomeno": "lavado",
+      "fenomeno_label": "Lavado de activos",
+      "uaf": true
+    },
+    {
+      "id": "t2",
+      "titulo": "PDI detuvo a tres personas por red de contrabando en Iquique",
+      "resumen": "La Policía de Investigaciones detuvo a Marcela Ortiz Vega, a Luis Alberto Fernández Cáceres y a un ciudadano boliviano en el marco de la Operación Frontera Norte.",
+      "texto_enriquecido": "El Servicio Nacional de Aduanas incautó mercadería avaluada en US$ 1,2 millones. La empresa Importadora Tarapacá S.A. figura como consignataria. El seremi de Hacienda, Pedro Soto, valoró el operativo. La causa la lleva el Juzgado de Garantía de Iquique. Marcela Ortiz habría utilizado cuentas del Banco Estado y de Scotiabank Chile.",
+      "medio": "El Mercurio",
+      "fecha": "2026-07-20",
+      "link": "https://ejemplo.cl/t2",
+      "uaf": false
+    },
+    {
+      "id": "t3",
+      "titulo": "Caso Factop: nuevas aristas salpican a Sartor Finance Group",
+      "resumen": "La CMF sancionó a Sartor Administradora General de Fondos S.A. Los hermanos Ariel y Daniel Sauer, junto a Rodrigo Topelberg, siguen siendo investigados.",
+      "texto_enriquecido": "El caso Factop involucra a Factop SpA, a STF Capital Corredores de Bolsa S.A. y a Grupo Patio. El abogado Luis Hermosilla Osorio fue condenado por soborno, lavado de activos y delitos tributarios. Antonio Jalaff y Álvaro Jalaff aparecen mencionados en la investigación. La Fiscalía Metropolitana Oriente continúa indagando. Doña María Cecilia Pérez declaró como testigo.",
+      "medio": "Ex-Ante",
+      "fecha": "2026-07-25",
+      "link": "https://ejemplo.cl/t3",
+      "uaf": true
+    },
+    {
+      "id": "t4",
+      "titulo": "Municipalidad de Maipú presenta querella contra ex funcionarios",
+      "resumen": "La Municipalidad de Maipú presentó una querella contra el ex director de finanzas, Sergio Muñoz Alarcón, por fraude al fisco.",
+      "texto_enriquecido": "El Consejo de Defensa del Estado se hizo parte. La alcaldesa Cathy Barriga fue mencionada en la causa. Las boletas fueron emitidas por Consultora Gestión Local EIRL y por Servicios Integrales Maipú E.I.R.L. El Tribunal de Cuentas de la Contraloría General de la República revisa los antecedentes. La Tesorería General de la República informó deudas pendientes.",
+      "medio": "BioBioChile",
+      "fecha": "2026-07-28",
+      "link": "https://ejemplo.cl/t4",
+      "uaf": false
+    },
+    {
+      "id": "t5",
+      "titulo": "Corte de Apelaciones confirma condena por lavado en el norte",
+      "resumen": "La Corte de Apelaciones de Antofagasta confirmó la condena contra Jorge Alberto Castillo Rojas.",
+      "texto_enriquecido": "El Tribunal Oral en lo Penal de Calama había condenado a Castillo Rojas a 10 años. Su pareja, Karen Villalobos Núñez, fue absuelta. Los bienes decomisados incluyen inmuebles en Antofagasta y un vehículo. La sociedad Minera Los Andes SpA fue disuelta. Participaron la PDI y el Ministerio Público. Un informe de la Unidad de Análisis Financiero fue clave.",
+      "medio": "Diario Financiero",
+      "fecha": "2026-08-01",
+      "link": "https://ejemplo.cl/t5",
+      "uaf": true
+    }
+  ]
+}

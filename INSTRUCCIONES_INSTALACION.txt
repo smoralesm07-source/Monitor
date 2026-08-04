@@ -1,0 +1,83 @@
+MONITOR UAF — RECONOCIMIENTO DE PERSONAS NATURALES Y JURÍDICAS v3.0.0
+
+ARCHIVOS NUEVOS QUE DEBES AGREGAR A LA RAÍZ
+-------------------------------------------
+1. reconocedor_entidades.py        (motor de reconocimiento)
+2. test_reconocedor_entidades.py   (24 pruebas de regresión)
+3. benchmark_entidades.py          (medición contra estándar anotado)
+
+ARCHIVOS QUE DEBES REEMPLAZAR EN LA RAÍZ
+-----------------------------------------
+4. modulo_entidades.py
+5. entidades_config.json
+6. test_modulo_entidades.py
+7. requirements_entidades.txt
+8. .github/workflows/monitor.yml
+
+NO REEMPLACES
+-------------
+- monitor_uaf.py
+- test_monitor.py
+- index.html
+- entidades.html
+- datos.json
+- fuentes_uaf.json
+- semillas_verificadas.json
+- correcciones_fechas.json
+- exclusiones_editoriales.json
+
+NOTA SOBRE entidades.html
+-------------------------
+La v3 solo AGREGA campos a la salida; no elimina ni renombra ninguno de los
+que consume la interfaz actual. entidades.html sigue funcionando sin cambios.
+Los campos nuevos (naturaleza, confianza_score, senales, ruts) quedan
+disponibles en datos.json para cuando quieras exponerlos en la página.
+
+DEPENDENCIA NUEVA
+-----------------
+rapidfuzz>=3.0  — resuelve correferencias y variantes ortográficas.
+Si no está instalada, el módulo degrada a comparación exacta y continúa.
+
+EJECUCIÓN LOCAL
+---------------
+pip install -r requirements_entidades.txt
+python -m spacy download es_core_news_sm
+python modulo_entidades.py --entrada datos.json --salida datos.json
+
+VALIDACIÓN
+----------
+python -m unittest test_modulo_entidades test_reconocedor_entidades
+python benchmark_entidades.py --salida datos.json
+
+EJECUCIÓN EN GITHUB ACTIONS
+---------------------------
+Actions > Actualizar y publicar monitor UAF > Run workflow
+
+  modo: conciliacion
+  reiniciar_estado: false
+  probar_correo: false
+
+No uses "Re-run failed jobs" de una ejecución antigua.
+
+LOG ESPERADO
+------------
+Análisis relacional listo: N publicaciones · N entidades
+(N personas naturales, N personas jurídicas) · N relaciones explícitas ·
+N casos/eventos · modelo=es_core_news_sm ·
+reconocedor=3.0.0-personas-naturales-y-juridicas
+
+Si aparece la advertencia "Reconocedor v3 no disponible", significa que
+reconocedor_entidades.py no quedó en la raíz. El proceso NO falla: continúa
+con el reconocimiento heredado v2, pero sin la clasificación por naturaleza.
+
+VERIFICACIÓN RÁPIDA DE QUE LA v3 ESTÁ ACTIVA
+---------------------------------------------
+python -c "import json; d=json.load(open('datos.json')); \
+m=d['analisis_entidades']; print(m['reconocedor'], m['conteo_por_naturaleza'])"
+
+PRIMER PASO RECOMENDADO EN PRODUCCIÓN
+--------------------------------------
+Ejecuta sobre datos.json real y revisa las entidades con
+requiere_validacion=true. Ese subconjunto concentra los casos dudosos y es
+el mejor punto de partida para anotar una muestra propia y medir el
+desempeño real con benchmark_entidades.py.
