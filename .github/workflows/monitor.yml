@@ -58,7 +58,7 @@ jobs:
           echo "Directorio actual: $(pwd)"
           echo "Archivos disponibles:"
           find . -maxdepth 3 -type f | sort
-          for archivo in monitor_uaf.py test_monitor.py construye_sitio.py generar_resumen.py index.html fuentes_uaf.json semillas_verificadas.json auditoria.html modulo_entidades.py test_modulo_entidades.py entidades_config.json entidades.html requirements_entidades.txt; do
+          for archivo in monitor_uaf.py test_monitor.py construye_sitio.py index.html fuentes_uaf.json semillas_verificadas.json auditoria.html modulo_entidades.py reconocedor_entidades.py test_modulo_entidades.py test_reconocedor_entidades.py entidades_config.json entidades.html requirements_entidades.txt; do
             if [[ ! -f "$archivo" ]]; then
               echo "::error title=Archivo faltante::$archivo debe estar en la raíz del repositorio"
               exit 2
@@ -178,7 +178,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 -m unittest -v test_monitor.py test_modulo_entidades.py 2>&1 | tee validacion.log
+          python3 -m unittest -v test_monitor.py test_modulo_entidades.py test_reconocedor_entidades.py 2>&1 | tee validacion.log
           python3 -u monitor_uaf.py --validar-fuentes 2>&1 | tee -a validacion.log
 
       - name: Validación rápida programada
@@ -186,7 +186,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 -m py_compile monitor_uaf.py modulo_entidades.py construye_sitio.py generar_resumen.py 2>&1 | tee validacion.log
+          python3 -m py_compile monitor_uaf.py modulo_entidades.py construye_sitio.py 2>&1 | tee validacion.log
           python3 -u monitor_uaf.py --validar-fuentes 2>&1 | tee -a validacion.log
 
       - name: Probar correo
@@ -313,25 +313,6 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
         run: python3 -u construye_sitio.py
 
-      - name: Generar resumen ejecutivo para Centro-Monitoreo
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
-        shell: bash
-        run: |
-          set -o pipefail
-          python3 -u generar_resumen.py --entrada datos.json --salida resumen.json 2>&1 | tee resumen.log
-          test -s resumen.json
-          test -s public/resumen.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          raiz = json.loads(Path('resumen.json').read_text(encoding='utf-8'))
-          publicado = json.loads(Path('public/resumen.json').read_text(encoding='utf-8'))
-          assert raiz.get('tipo') == 'prensa', raiz.get('tipo')
-          assert publicado.get('tipo') == 'prensa', publicado.get('tipo')
-          assert raiz == publicado, 'El resumen de raíz y el publicado no coinciden'
-          print('resumen.json validado para prensa:', len(raiz.get('alertas', [])), 'alertas')
-          PY
-
       - name: Subir artefacto de Pages
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
         uses: actions/upload-pages-artifact@v3
@@ -377,10 +358,8 @@ jobs:
           tail -n 150 monitor.log 2>/dev/null || true
           echo "=== Últimas líneas del módulo de entidades ==="
           tail -n 100 entidades.log 2>/dev/null || true
-          echo "=== Últimas líneas del resumen ejecutivo ==="
-          tail -n 100 resumen.log 2>/dev/null || true
           echo "=== Tamaños ==="
-          du -h datos.json resumen.json public/resumen.json .monitor_estado.json monitor.log validacion.log entidades.log resumen.log 2>/dev/null || true
+          du -h datos.json .monitor_estado.json monitor.log validacion.log entidades.log 2>/dev/null || true
 
       - name: Adjuntar diagnóstico
         if: ${{ failure() }}
@@ -393,9 +372,6 @@ jobs:
             monitor.log
             validacion.log
             entidades.log
-            resumen.log
-            resumen.json
-            public/resumen.json
             datos.json
             .monitor_estado.json
 
