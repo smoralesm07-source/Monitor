@@ -179,24 +179,39 @@ def resumen_prensa(datos: dict) -> dict:
             tema_principal = texto(disponibles[0].get("label") or disponibles[0].get("etiqueta"))
 
     ultimo = registros[0] if registros else {}
+
+    # Hasta cuatro alertas recientes. Primero se consideran publicaciones
+    # relevantes; si no alcanzan cuatro, se completa con las más recientes.
+    recientes = sorted(
+        registros,
+        key=lambda x: fecha_registro(x) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    candidatos_alerta = [r for r in recientes if prioridad_prensa(r) > 0][:4]
+    ids_incluidos = {id(r) for r in candidatos_alerta}
+    for r in recientes:
+        if len(candidatos_alerta) >= 4:
+            break
+        if id(r) not in ids_incluidos:
+            candidatos_alerta.append(r)
+            ids_incluidos.add(id(r))
     candidatos_alerta = sorted(
-        registros[:20],
-        key=lambda x: (
-            prioridad_prensa(x),
-            fecha_registro(x) or datetime.min.replace(tzinfo=timezone.utc),
-        ),
+        candidatos_alerta,
+        key=lambda x: fecha_registro(x) or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
     )[:4]
 
     alertas = []
     for r in candidatos_alerta:
         nivel = prioridad_prensa(r)
+        dt_alerta = fecha_registro(r)
         alertas.append({
             "severidad": "alta" if nivel >= 3 else "media" if nivel == 2 else "info",
             "titulo": texto(r.get("titulo")) or "Publicación detectada",
             "detalle": texto(r.get("medio")) + (
                 f" · {texto(r.get('fecha'))}" if texto(r.get("fecha")) else ""
             ),
+            "fecha": dt_alerta.isoformat() if dt_alerta else "",
             "link": enlace_prensa(r),
             "fuente": "PRENSA",
         })
@@ -267,20 +282,24 @@ def resumen_legislativo(datos: dict) -> dict:
     )
     ultimo = (con_novedad[0] if con_novedad else (por_fecha[0] if por_fecha else {}))
 
-    prioritarios = sorted(
-        vigentes,
-        key=lambda p: (
-            texto(p.get("banda_prioridad")).lower() == "critica",
-            texto(p.get("banda_prioridad")).lower() == "alta",
-            texto(p.get("urgencia_clave")).lower() not in {"", "sin urgencia"},
-            numero(p.get("prioridad")),
-            fecha_registro(p) or datetime.min.replace(tzinfo=timezone.utc),
-        ),
+    # Hasta cuatro alertas recientes. Se priorizan proyectos con novedad;
+    # si no alcanzan cuatro, se completa con los movimientos más recientes.
+    candidatos_alerta = list(con_novedad[:4])
+    ids_incluidos = {id(p) for p in candidatos_alerta}
+    for p in por_fecha:
+        if len(candidatos_alerta) >= 4:
+            break
+        if id(p) not in ids_incluidos:
+            candidatos_alerta.append(p)
+            ids_incluidos.add(id(p))
+    candidatos_alerta = sorted(
+        candidatos_alerta,
+        key=lambda p: fecha_registro(p) or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
-    )[:5]
+    )[:4]
 
     alertas = []
-    for p in prioritarios:
+    for p in candidatos_alerta:
         banda = texto(p.get("banda_prioridad")).lower()
         urgencia = texto(p.get("urgencia_legible"))
         severidad = "alta" if banda in {"critica", "crítica", "alta"} else (
@@ -291,10 +310,12 @@ def resumen_legislativo(datos: dict) -> dict:
             texto(p.get("nivel_legible") or p.get("impacto_legible")),
             urgencia,
         ) if x)
+        dt_alerta = fecha_registro(p)
         alertas.append({
             "severidad": severidad,
             "titulo": texto(p.get("titulo")) or "Proyecto en seguimiento",
             "detalle": detalle,
+            "fecha": dt_alerta.isoformat() if dt_alerta else "",
             "link": enlace_proyecto(p),
             "fuente": "LEGISLATIVO",
         })
