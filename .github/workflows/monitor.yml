@@ -58,7 +58,7 @@ jobs:
           echo "Directorio actual: $(pwd)"
           echo "Archivos disponibles:"
           find . -maxdepth 3 -type f | sort
-          for archivo in monitor_uaf.py test_monitor.py construye_sitio.py index.html fuentes_uaf.json semillas_verificadas.json auditoria.html modulo_entidades.py reconocedor_entidades.py test_modulo_entidades.py test_reconocedor_entidades.py entidades_config.json entidades.html requirements_entidades.txt; do
+          for archivo in monitor_uaf.py test_monitor.py construye_sitio.py index.html fuentes_uaf.json semillas_verificadas.json auditoria.html modulo_entidades.py reconocedor_entidades.py geografia_cl.py test_modulo_entidades.py test_reconocedor_entidades.py entidades_config.json entidades.html requirements_entidades.txt; do
             if [[ ! -f "$archivo" ]]; then
               echo "::error title=Archivo faltante::$archivo debe estar en la raíz del repositorio"
               exit 2
@@ -312,15 +312,6 @@ jobs:
       - name: Construir sitio estático
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
         run: python3 -u construye_sitio.py
-
-      - name: Generar resumen para el centro de monitoreo
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -u generar_resumen.py --entrada datos.json --salida resumen.json
-          test -s public/resumen.json
-          python3 -c "import json;d=json.load(open('public/resumen.json'));print('resumen:',d['tipo'],'| 24h:',d['nuevas_24h'],'| 30d:',d['total_30d'])"
 
       - name: Subir artefacto de Pages
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.probar_correo != true }}
