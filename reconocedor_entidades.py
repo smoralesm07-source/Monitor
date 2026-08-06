@@ -27,6 +27,14 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import defaultdict
+
+try:  # Catálogo geográfico de Chile (comunas, provincias, regiones).
+    import geografia_cl as GEO
+
+    GEOGRAFIA_DISPONIBLE = True
+except Exception:  # pragma: no cover - degradación controlada
+    GEO = None
+    GEOGRAFIA_DISPONIBLE = False
 from typing import Any, Iterable
 
 VERSION_RECONOCEDOR = "3.0.0-personas-naturales-y-juridicas"
@@ -295,6 +303,67 @@ NOMBRES_PILA = {
     "renata", "antonella", "maite", "monserrat", "montserrat", "consuelo",
 }
 
+# Apellidos frecuentes en Chile (Registro Civil). Sirven como señal positiva
+# sobre el último token: un antropónimo cuyo primer token es un nombre de pila
+# conocido Y cuyo último token es un apellido conocido es prácticamente seguro.
+# No es un requisito — Chile tiene una alta proporción de apellidos de origen
+# migrante y mapuche fuera de esta lista.
+APELLIDOS_FRECUENTES = {
+    "gonzalez", "munoz", "rojas", "diaz", "perez", "soto", "contreras",
+    "silva", "martinez", "sepulveda", "morales", "rodriguez", "lopez",
+    "fuentes", "hernandez", "torres", "araya", "flores", "espinoza",
+    "valenzuela", "castillo", "ramirez", "reyes", "gutierrez", "castro",
+    "vargas", "alvarez", "vasquez", "tapia", "fernandez", "sanchez",
+    "carrasco", "gomez", "cortes", "herrera", "nunez", "jara", "vergara",
+    "rivera", "figueroa", "riquelme", "bravo", "vera", "molina", "vega",
+    "campos", "sandoval", "orellana", "miranda", "olivares", "garcia",
+    "navarro", "saavedra", "ortiz", "alarcon", "guzman", "salazar", "yanez",
+    "cardenas", "medina", "aguilera", "leiva", "pena", "gallardo", "ruiz",
+    "escobar", "arriagada", "aravena", "godoy", "aguirre", "maldonado",
+    "cabrera", "farias", "venegas", "pinto", "salinas", "romero", "toro",
+    "acuna", "poblete", "bustos", "concha", "ibanez", "parra", "leon",
+    "ortega", "moreno", "arias", "avila", "bustamante", "cortez", "mora",
+    "palma", "quezada", "san martin", "santander", "solis", "ulloa",
+    "urrutia", "valdes", "valdivia", "villegas", "zamora", "zuniga",
+    "barrera", "barrios", "becerra", "benitez", "caceres", "camus", "canales",
+    "carvajal", "catalan", "cerda", "cespedes", "chavez", "cifuentes",
+    "correa", "cuevas", "delgado", "donoso", "duran", "elgueta", "escalona",
+    "estay", "fica", "fuenzalida", "galaz", "gajardo", "garrido", "gatica",
+    "guerra", "guerrero", "hidalgo", "hormazabal", "huerta", "inostroza",
+    "lagos", "lara", "lazo", "lillo", "llanos", "lobos", "loyola", "lucero",
+    "luna", "mancilla", "manriquez", "marin", "marchant", "mella", "mendez",
+    "mendoza", "meza", "montecinos", "montenegro", "monsalve", "moya",
+    "neira", "novoa", "obreque", "ojeda", "olguin", "oyarce", "oyarzun",
+    "pacheco", "padilla", "paredes", "pavez", "pizarro", "pino", "plaza",
+    "ponce", "prado", "quintana", "quiroz", "ramos", "rebolledo", "retamal",
+    "rios", "rivas", "roa", "roman", "rubio", "saez", "salas", "sanhueza",
+    "santibanez", "sanzana", "sarmiento", "sierra", "sotomayor", "suarez",
+    "tobar", "toledo", "troncoso", "uribe", "valle", "vallejos", "veas",
+    "velasquez", "verdugo", "vidal", "villalobos", "villarroel", "yevenes",
+    "zapata", "zavala", "acevedo", "alvarado", "andrade", "antileo", "apablaza",
+    "arancibia", "astudillo", "avendano", "azocar", "baeza", "bahamondes",
+    "balboa", "banda", "barra", "berrios", "bobadilla", "briones", "burgos",
+    "caro", "carreno", "carrillo", "castaneda", "cerpa", "colil", "coloma",
+    "cuello", "curihual", "diez", "dominguez", "echeverria", "espina",
+    "fritz", "gaete", "gallegos", "gamboa", "gandara", "garay", "gonzales",
+    "guajardo", "henriquez", "huaiquil", "huenchullan", "huenupan", "ibacache",
+    "iturra", "jaramillo", "jimenez", "labra", "lagunas", "lam", "landeros",
+    "lefian", "lemus", "levican", "linares", "liempi", "llaupe", "loncon",
+    "maldonado", "mansilla", "marileo", "melillan", "melo", "millalen",
+    "montoya", "morales", "mundaca", "munita", "nahuelpan", "namuncura",
+    "naranjo", "nasser", "nazar", "olate", "opazo", "osorio", "oteiza",
+    "painemal", "palacios", "pardo", "pastene", "pereira", "pinilla",
+    "pinochet", "prieto", "puelma", "quilodran", "quintanilla", "rabanal",
+    "raiman", "recabarren", "riffo", "rioseco", "rocha", "rojo", "rosales",
+    "rozas", "ruminot", "sagredo", "salgado", "sanmartin", "sepulveda",
+    "sierralta", "silvestre", "soto", "tapia", "tello", "tirado", "torrealba",
+    "trujillo", "turra", "urra", "urzua", "valdebenito", "valdivieso",
+    "vejar", "velez", "venegas", "vicencio", "vielma", "vilches", "villa",
+    "villablanca", "villagra", "villagran", "villanueva", "vivanco", "wilson",
+    "yanquileo", "zambrano", "zamorano", "zarate", "zenteno", "zurita",
+    "hermosilla", "jalaff", "sauer", "topelberg", "barriga", "guerra",
+}
+
 # Partículas que aparecen en minúscula dentro de apellidos compuestos.
 PARTICULAS_APELLIDO = {
     "de", "del", "de la", "de los", "de las", "la", "las", "los", "van", "von",
@@ -379,7 +448,7 @@ ROLES_PERSONA = (
     r"imputad[oa]|formalizad[oa]|condenad[oa]|acusad[oa]|querellad[oa]|"
     r"investigad[oa]|detenid[oa]|proces[oa]d[oa]|absuelt[oa]|sentenciad[oa]|"
     r"empresari[oa]|abogad[oa]|fiscal|juez|jueza|ministr[oa]|magistrad[oa]|"
-    r"gerente|director(?:a)?|presidente|vicepresidente|socio|socia|accionista|"
+    r"gerent[ea]|director(?:a)?|presidenta?|vicepresidente|socio|socia|accionista|"
     r"representante|apoderad[oa]|contador(?:a)?|auditor(?:a)?|perit[oa]|"
     r"testig[oa]|denunciante|querellante|víctima|victima|"
     r"alcalde|alcaldesa|concejal|diputad[oa]|senador(?:a)?|seremi|"
@@ -547,8 +616,8 @@ MODIFICADORES_CARGO = (
 )
 
 PERSONA_PRECEDIDA_RE = re.compile(
-    r"(?:\b(?:don|do[ñn]a|sr\.|sra\.|se[ñn]or|se[ñn]ora|" + ROLES_PERSONA + r")"
-    r"(?:\s+" + MODIFICADORES_CARGO + r"){0,4}\s+)"
+    r"(?:(?i:\b(?:don|do[ñn]a|sr\.|sra\.|se[ñn]or|se[ñn]ora|" + ROLES_PERSONA + r")"
+    r"(?:\s+" + MODIFICADORES_CARGO + r"){0,4})\s+)"
     r"(" + _TP + r"(?:\s+(?:de|del|la|los|las|van|von|da|di)){0,2}"
     r"(?:\s+" + _TP + r"){1,3})",
     re.UNICODE,
@@ -557,8 +626,8 @@ PERSONA_PRECEDIDA_RE = re.compile(
 # Aposición tras una frase de cargo: "El gerente general de la compañía,
 # Óscar Villablanca Ríos, señaló que…".
 PERSONA_APOSICION_RE = re.compile(
-    r"\b(?:" + ROLES_PERSONA + r")"
-    r"(?:\s+" + MODIFICADORES_CARGO + r"|\s+" + _TP + r"){0,5}"
+    r"(?i:\b(?:" + ROLES_PERSONA + r"))"
+    r"(?:(?i:\s+" + MODIFICADORES_CARGO + r")|\s+" + _TP + r"){0,5}"
     r"\s*,\s*"
     r"(" + _TP + r"(?:\s+(?:de|del|la|los|las|van|von|da|di)){0,2}"
     r"(?:\s+" + _TP + r"){1,3})"
@@ -586,10 +655,10 @@ PERSONA_ANTES_DE_RUT_RE = re.compile(
 
 # Persona objeto de acción procesal: "formalizó a Juan Pérez".
 PERSONA_ACCION_RE = re.compile(
-    r"\b(?:formaliz(?:ó|o|aron)|imput(?:ó|o|aron)|conden(?:ó|o|aron)|"
+    r"(?i:\b(?:formaliz(?:ó|o|aron)|imput(?:ó|o|aron)|conden(?:ó|o|aron)|"
     r"acus(?:ó|o|aron)|detuv(?:o|ieron)|investiga(?:n|ron)?|indag(?:a|an|ó|o)|"
     r"querell(?:ó|o|aron)\s+contra|absolvi(?:ó|o|eron)|sentenci(?:ó|o|aron))"
-    r"\s+a\s+(" + _TP + r"(?:\s+(?:de|del|la|los|las|van|von|da|di)){0,2}"
+    r"\s+a\s+)(" + _TP + r"(?:\s+(?:de|del|la|los|las|van|von|da|di)){0,2}"
     r"(?:\s+" + _TP + r"){1,3})",
     re.UNICODE,
 )
@@ -837,6 +906,28 @@ def clasifica_cadena(
         return {"tipo": "OTRO", "naturaleza": "INDETERMINADA", "score": 0.1,
                 "senales": senales, "descartar": True, "motivo": "contiene_digitos"}
 
+    # --- Desambiguación geográfica ----------------------------------------
+    # Una comuna con forma de nombre propio ("San Ramón", "Pedro Aguirre
+    # Cerda", "Padre Hurtado") no puede convertirse en una persona natural de
+    # la nómina: sería nombrar a alguien que no aparece en la noticia.
+    if GEOGRAFIA_DISPONIBLE:
+        geo = GEO.evalua_geografia(nombre, contexto_izq or "")
+        senales.extend(str(x) for x in geo["senales"])
+        if geo["es_lugar"]:
+            info = geo.get("info") or {}
+            resultado = {
+                "tipo": "LUGAR", "naturaleza": "NO_APLICA",
+                "score": 0.95 if geo["fuerza"] == "definitiva" else 0.85,
+                "senales": senales, "descartar": False,
+                "motivo": "toponimo_chileno",
+            }
+            if info:
+                resultado["nombre_geografico"] = info.get("canonico")
+                resultado["nivel_geografico"] = info.get("nivel")
+                if info.get("region"):
+                    resultado["region"] = info["region"]
+            return resultado
+
     # --- Evaluación de persona natural ------------------------------------
     score = 0.0
     n_tokens = len(toks)
@@ -877,6 +968,21 @@ def clasifica_cadena(
     if len(contenido) >= 2 and contenido[1] in NOMBRES_PILA:
         score += 0.10
         senales.append("segundo_nombre_de_pila")
+
+    tiene_pila = bool(contenido) and contenido[0] in NOMBRES_PILA
+    tiene_apellido = any(t in APELLIDOS_FRECUENTES for t in contenido[1:])
+    if tiene_apellido:
+        score += 0.20
+        senales.append("apellido_frecuente_en_chile")
+    if tiene_pila and tiene_apellido:
+        score += 0.10
+        senales.append("estructura_nombre_apellido_completa")
+    if not tiene_pila and not tiene_apellido:
+        # Sin nombre de pila ni apellido reconocibles, la cadena capitalizada
+        # puede ser cualquier cosa: marca, topónimo menor, título. Se exige
+        # entonces evidencia contextual explícita para admitirla como persona.
+        score -= 0.20
+        senales.append("sin_evidencia_antroponimica_lexica")
 
     if TRATAMIENTOS.search(contexto_izq or ""):
         score += 0.30

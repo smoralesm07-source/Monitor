@@ -78,6 +78,7 @@ ORO: dict[str, dict[str, set[str]]] = {
         "PERSONA_NATURAL": {
             "Antonio Jalaff", "Álvaro Jalaff", "Daniel Sauer",
             "Rodrigo Topelberg", "Luis Hermosilla Osorio",
+            "María Cecilia Pérez",
         },
         "PERSONA_JURIDICA": {
             "Factop SpA", "Sartor Finance Group", "Grupo Patio",
