@@ -23,11 +23,13 @@ import argparse
 import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
 
 BASE = Path(__file__).resolve().parent
+TZ_CL = ZoneInfo("America/Santiago")
 
 
 def entero(valor: Any, defecto: int = 0) -> int:
@@ -150,7 +152,10 @@ def prioridad_prensa(registro: dict) -> int:
 def resumen_prensa(datos: dict) -> dict:
     registros = [x for x in lista(datos.get("prensa")) if isinstance(x, dict)]
     registros.sort(key=lambda x: fecha_registro(x) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-    ref = fecha_base(datos, registros)
+
+    # Las ventanas móviles deben calcularse respecto de la ejecución actual,
+    # no respecto de una métrica previa almacenada en datos.json.
+    ref = datetime.now(TZ_CL)
     desde_24h = ref - timedelta(hours=24)
     desde_5d = ref - timedelta(days=5)
     desde_30d = ref - timedelta(days=30)
@@ -160,7 +165,6 @@ def resumen_prensa(datos: dict) -> dict:
     ultimos_30d = [x for x in registros if fecha_registro(x) and fecha_registro(x) >= desde_30d]
 
     metricas = datos.get("metricas") if isinstance(datos.get("metricas"), dict) else {}
-    portada = metricas.get("uaf_portada") if isinstance(metricas.get("uaf_portada"), dict) else {}
 
     menciones_24h = sum(es_mencion_uaf(x) for x in ultimas_24h)
     menciones_30d = sum(es_mencion_uaf(x) for x in ultimos_30d)
@@ -220,10 +224,12 @@ def resumen_prensa(datos: dict) -> dict:
         "esquema": "centro-monitor-1.0",
         "tipo": "prensa",
         "estado": "activo",
-        "generado": texto(datos.get("generado")) or ref.isoformat(),
+        # `generado` representa la actualización efectiva del resumen. La fecha
+        # original del monitor se conserva separadamente para auditoría.
+        "generado": ref.isoformat(),
+        "origen_generado": texto(datos.get("generado")),
         "generado_legible": texto(datos.get("generado_legible")),
-        "nuevas_24h": entero(portada.get("menciones_24h"), len(ultimas_24h))
-            if portada.get("menciones_24h") is not None else len(ultimas_24h),
+        "nuevas_24h": len(ultimas_24h),
         "publicaciones_5d": len(ultimos_5d),
         "total_30d": len(ultimos_30d),
         "menciones_uaf": menciones_24h,
@@ -245,8 +251,8 @@ def resumen_prensa(datos: dict) -> dict:
         "alertas": alertas,
         "actividad": [
             {
-                "fecha": texto(datos.get("generado")) or ref.isoformat(),
-                "texto": f"Barrido de prensa completado: {len(registros)} publicaciones disponibles.",
+                "fecha": ref.isoformat(),
+                "texto": f"Resumen de prensa actualizado: {len(registros)} publicaciones disponibles.",
             }
         ],
     }
