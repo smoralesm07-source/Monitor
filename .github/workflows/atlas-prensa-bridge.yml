@@ -1,0 +1,120 @@
+name: Exportar entidades de prensa para Atlas
+
+on:
+  workflow_run:
+    workflows: ["Actualizar y publicar monitor UAF"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atlas-press-bridge
+  cancel-in-progress: true
+
+jobs:
+  exportar:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Descargar código del bridge
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Recuperar último corte enriquecido del monitor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf monitor_state press_state
+          git clone --quiet --depth 1 --branch monitor-state \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" monitor_state
+          test -s monitor_state/datos.json
+          cp monitor_state/datos.json datos_atlas_input.json
+
+          if git clone --quiet --depth 1 --branch atlas-press-state \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" press_state; then
+            [[ -f press_state/atlas_prensa.json ]] && cp press_state/atlas_prensa.json atlas_prensa_previo.json || true
+          else
+            echo "Primera exportación histórica para Atlas."
+          fi
+
+      - name: Validar bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v test_exportar_atlas_prensa.py
+          python3 -m py_compile exportar_atlas_prensa.py
+
+      - name: Construir índice histórico para Atlas
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(--entrada datos_atlas_input.json --salida atlas_prensa.json --retencion-dias 1825)
+          if [[ -f atlas_prensa_previo.json ]]; then
+            ARGS+=(--estado-previo atlas_prensa_previo.json)
+          fi
+          python3 -u exportar_atlas_prensa.py "${ARGS[@]}" | tee atlas_prensa.log
+          test -s atlas_prensa.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('atlas_prensa.json')
+          d=json.loads(p.read_text(encoding='utf-8'))
+          assert d.get('version') == '1.0.0-atlas-press-bridge'
+          assert isinstance(d.get('entities'), list)
+          assert isinstance(d.get('mentions'), list)
+          assert isinstance(d.get('articles'), list)
+          print('Tamaño:', p.stat().st_size, 'bytes')
+          print('Estadísticas:', d.get('stats'))
+          PY
+
+      - name: Publicar estado histórico aislado
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf atlas_state_new
+          mkdir atlas_state_new
+          cp atlas_prensa.json atlas_state_new/
+          cat > atlas_state_new/README.md <<'EOF'
+          # ATLAS · Radar Prensa bridge
+
+          Rama de estado generada automáticamente. Contiene un índice histórico compacto
+          de entidades y menciones detectadas por el Monitor UAF para consumo de ATLAS.
+
+          `PRESS_ONLY` significa identidad observada en prensa y no conciliada aún con
+          una identidad canónica de ATLAS. Una mención no acredita delito ni identidad.
+          EOF
+          cd atlas_state_new
+          git init --quiet
+          git checkout --quiet -b atlas-press-state
+          git config user.name "atlas-press-bridge[bot]"
+          git config user.email "atlas-press-bridge@users.noreply.github.com"
+          git add atlas_prensa.json README.md
+          git commit --quiet -m "Atlas prensa $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push --quiet --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" atlas-press-state
+
+      - name: Adjuntar diagnóstico si falla
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-atlas-press-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            atlas_prensa.log
+            atlas_prensa.json
+            datos_atlas_input.json
