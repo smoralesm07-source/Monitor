@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'exportar_atlas_prensa.py'
+      - 'normalizar_atlas_prensa.py'
       - 'test_exportar_atlas_prensa.py'
       - '.github/workflows/atlas-prensa-bridge.yml'
   workflow_run:
@@ -60,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest -v test_exportar_atlas_prensa.py
-          python3 -m py_compile exportar_atlas_prensa.py
+          python3 -m py_compile exportar_atlas_prensa.py normalizar_atlas_prensa.py
 
       - name: Construir índice histórico para Atlas
         shell: bash
@@ -71,6 +72,7 @@ jobs:
             ARGS+=(--estado-previo atlas_prensa_previo.json)
           fi
           python3 -u exportar_atlas_prensa.py "${ARGS[@]}" | tee atlas_prensa.log
+          python3 -u normalizar_atlas_prensa.py --indice atlas_prensa.json --datos datos_atlas_input.json | tee -a atlas_prensa.log
           test -s atlas_prensa.json
           python3 - <<'PY'
           import json
