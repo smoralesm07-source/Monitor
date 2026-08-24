@@ -1,6 +1,12 @@
 name: Exportar entidades de prensa para Atlas
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'exportar_atlas_prensa.py'
+      - 'test_exportar_atlas_prensa.py'
+      - '.github/workflows/atlas-prensa-bridge.yml'
   workflow_run:
     workflows: ["Actualizar y publicar monitor UAF"]
     types: [completed]
@@ -15,7 +21,7 @@ concurrency:
 
 jobs:
   exportar:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
