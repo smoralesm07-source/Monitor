@@ -1,55 +1,56 @@
-# Analizador RES v5.0 — contrato de integración Atlas
+# Analizador RES v6.0 — contrato de integración Atlas
 
 ## Estado
-Candidato final para integración, pendiente de aprobación. La demo continúa separada de Atlas.
+Candidato final optimizado para integración, pendiente de aprobación. La demo permanece fuera de Atlas.
 
-## Cambio principal de v5
-La portada introductoria fue eliminada. La navegación parte directamente en la analítica y agrega **drill-down de sociedad**: desde fenómenos, comunas y recurrencias se puede abrir una ficha individual RES.
+## Principio de diseño
+La analítica agregada debe poder conducir a una nómina de sociedades y, desde allí, a una ficha individual. La visualización no es un fin en sí misma: sirve para seleccionar universos de revisión reproducibles.
 
-## Alcance funcional
-El módulo sigue limitado a `aml_res_company` y a fenómenos observables:
-- volumen y evolución temporal;
-- región y comuna;
-- tipo societario;
-- capital declarado;
-- fechas de constitución, registro y aprobación SII;
-- recurrencia fecha + comuna + tipo + capital;
-- desviaciones temporales;
-- patrones de razón social;
-- caracterización individual de sociedades y contexto de cohorte.
+## Alcance
+Solo utiliza `aml_res_company` y variables observables del RES: RUT, razón social, fechas, tipo societario, capital y territorio social/tributario. Se mantienen fuera socios, accionistas, representantes, administradores, beneficiario final y relaciones persona–sociedad.
 
-## Ficha societaria
-La ficha debe mostrar tres capas:
+## Flujo operativo propuesto
+1. **Pulso** detecta cambios de escala y composición.
+2. **Territorio** identifica regiones/comunas con cambio reciente.
+3. **Fenómenos** permite seleccionar una señal.
+4. La selección filtra una **tabla de sociedades**.
+5. Clic en una fila abre la **ficha societaria RES**.
 
-1. **Dato bruto RES**: RUT, razón social, tipo, capital, fechas, territorio social y tributario.
-2. **Caracterización derivada**: rezago constitución→registro, rezago constitución→SII, capital vs. mediana del tipo, capital recurrente y consistencia territorial.
-3. **Contexto de cohorte**: número de sociedades que comparten fecha + comuna + tipo + capital, más tokens de razón social vinculados al vocabulario emergente.
+## Filtros accionables
+- burbuja de intensidad × persistencia → cohortes de sociedades relacionadas con el fenómeno observable;
+- fecha crítica → `constitution_date`;
+- comuna crítica → `social_commune`;
+- recurrencia → fecha/comuna/tipo/capital;
+- familia de razón social → conjunto de RUTs identificados por denominación normalizada o serie léxica;
+- búsqueda directa → RUT o razón social.
 
-La ficha no infiere giro, vínculo, irregularidad ni riesgo.
+## Fechas críticas
+Se comparan conteos diarios con un baseline histórico 2022–2025 del mismo mes y mismo día de semana. `|z| >= 2` se usa como apoyo exploratorio. Los feriados deben marcarse explícitamente para evitar interpretar efectos de calendario como fenómenos societarios.
 
-## Búsqueda
-En Atlas, la barra de búsqueda debe consultar el universo completo de `aml_res_company` por RUT o razón social, con sugerencias mientras se escribe. La demo usa una muestra real de sociedades asociadas a fenómenos actuales para evaluar experiencia de usuario.
+**Importante:** una caída de constituciones no equivale a una baja, término o disolución societaria. La réplica actual no contiene una capa de disoluciones suficientemente poblada, por lo que esa métrica queda fuera.
 
-## Exclusiones de diseño
-No se incorporan ni se consultan socios, accionistas, representantes, administradores, personas naturales, relaciones persona–sociedad ni beneficiario final. Tampoco se generan inferencias AML.
+## Comunas críticas
+La priorización combina volumen reciente, cambio respecto de los 30 días anteriores y comparación con el mismo período del año anterior. El resultado ordena revisión; no es riesgo AML.
 
-## Vistas
-1. **Pulso**.
-2. **Territorio**.
-3. **Fenómenos**, incluyendo ficha societaria como drill-down transversal.
+## Razones sociales parecidas
+La v6 incorpora apoyo para:
+- razones sociales normalizadas idénticas asociadas a RUT distintos;
+- series léxicas dentro de una misma cohorte de constitución;
+- similitud trigram como técnica exploratoria para ampliar candidatos.
 
-## Fuente mínima
-`aml_res_company`:
-`rut`, `rut_key`, `legal_name`, `constitution_date`, `registry_date`, `sii_approval_date`, `source_year`, `source_month`, `social_commune`, `social_region`, `tax_commune`, `tax_region`, `company_code`, `capital`.
+La similitud nominal no implica relación societaria, control común ni irregularidad.
 
-## Integración propuesta
-Al aprobarse:
-1. portar las tres vistas al estándar visual Atlas;
-2. implementar consultas agregadas RES en backend;
-3. implementar búsqueda por RUT/razón social y detalle por RUT;
-4. calcular cohortes y métricas derivadas en backend o vistas materializadas;
-5. conservar ayuda metodológica y fecha de corte;
-6. validar paridad de indicadores y fichas entre demo y Atlas antes de habilitar el módulo.
+## Tabla de sociedades
+En la demo se utiliza una muestra real ampliada para validar experiencia de uso. En Atlas, los filtros deben ejecutarse contra el universo completo de `aml_res_company`, con paginación/consulta servidor y sin descargar 1,6 millones de filas al navegador.
 
-## Principio metodológico
-ICE-RES, los estados de fenómeno y la caracterización de ficha ordenan la exploración. No son score de riesgo ni calificación de irregularidad.
+Columnas mínimas:
+`rut`, `legal_name`, `company_code`, `constitution_date`, `social_commune`, `capital`, `cohort_size`, caracterización derivada.
+
+## Ficha individual
+Conserva tres niveles:
+1. dato bruto RES;
+2. caracterización derivada (rezagos, capital vs mediana del tipo, consistencia territorial, capital recurrente);
+3. contexto de cohorte (`fecha + comuna + tipo + capital`).
+
+## Regla de integración
+Antes de habilitar en Atlas, validar paridad entre la demo y consultas directas a `aml_res_company` para cada señal, filtro y ficha. Ningún componente debe consumir `aml_res_relationship` ni tablas de personas.
