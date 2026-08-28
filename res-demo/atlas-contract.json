@@ -1,0 +1,35 @@
+{
+  "module": "res_societary_dynamics",
+  "version": "4.0.0",
+  "status": "atlas_candidate_final",
+  "source_scope": "RES_only",
+  "cutoff": "2026-07-31",
+  "views": [
+    {"id":"pulso","label":"Pulso","purpose":"Contexto nacional, evolución, composición y momentum"},
+    {"id":"territorio","label":"Territorio","purpose":"Cambio regional/comunal y priorización territorial explicable"},
+    {"id":"fenomenos","label":"Fenómenos","purpose":"Emergencia, persistencia, recurrencia y patrones semánticos observables"}
+  ],
+  "required_source": {
+    "table": "aml_res_company",
+    "fields": ["rut_key","legal_name","constitution_date","source_year","source_month","social_commune","social_region","tax_commune","tax_region","company_code","capital"]
+  },
+  "derived_metrics": {
+    "ytd_growth": "(ytd_current - ytd_previous) / ytd_previous",
+    "momentum_30d": "(last_30d - previous_30d) / previous_30d",
+    "yoy_30d": "(last_30d - same_window_previous_year) / same_window_previous_year",
+    "seasonal_z": "z-score exploratorio contra mismo mes histórico",
+    "recurrence_cluster": "misma fecha + comuna + tipo societario + capital; luego persistencia por múltiples días",
+    "standard_capital_share": "participación de capitales 1m/2m/5m/10m",
+    "vocabulary_lift": "frecuencia reciente de token de razón social versus ventana previa con suavizado",
+    "ice_res": "índice 0-100 para priorizar magnitud de cambio; no mide riesgo AML"
+  },
+  "phenomenon_states": ["emerging","structural","persistent","cooling","watch"],
+  "excluded_by_design": ["socios","accionistas","representantes","administradores","personas_naturales","relaciones_persona_sociedad","beneficiario_final","inferencias_aml"],
+  "integration_rules": [
+    "No consumir aml_res_relationship ni tablas de personas.",
+    "Mantener RES como única fuente del módulo.",
+    "Mostrar fecha de corte en todas las vistas.",
+    "Toda priorización debe conservar componentes explicables.",
+    "No usar etiquetas de sospecha, alerta AML o riesgo LA/FT."
+  ]
+}
