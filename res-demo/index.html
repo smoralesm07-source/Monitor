@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<title>Analizador RES · Demo</title>
+<link href="style.css" rel="stylesheet"/></head>
+<body>
+<div class="app">
+<div class="topbar">
+<div class="topbar-inner">
+<div class="brand"><div class="logo"></div><div><h1>ANALIZADOR RES</h1><small>Inteligencia societaria · demo autónoma</small></div></div>
+<div class="badges">
+<span class="badge hot">SOLO RES</span><span class="badge" id="healthBadge" style="color:#9ce8c5;border-color:#2d604d">Datos embebidos ✓</span>
+<span class="badge">Corte 31·07·2026</span>
+<span class="badge">1.609.372 sociedades</span>
+</div>
+</div>
+<div class="nav">
+<button class="active" data-tab="pulso">Pulso RES</button>
+<button data-tab="territorio">Territorio</button>
+<button data-tab="fenomenos">Fenómenos</button>
+<button data-tab="estructura">Estructura &amp; red</button>
+</div>
+</div>
+<main>
+<section class="hero">
+<div class="hero-card">
+<div class="eyebrow">Registro de Empresas y Sociedades</div>
+<h2>Una mirada analítica al comportamiento societario chileno</h2>
+<p>Demo separada de Atlas. Todos los indicadores y fenómenos se calculan únicamente con la réplica RES actualmente disponible. La señal es <b>atipicidad societaria</b>, no riesgo LA/FT.</p>
+</div>
+<div class="hero-side card">
+<div class="scope-row"><span class="dot"></span><div><strong>Base real cargada</strong><span>Constituciones 02·05·2013 → 31·07·2026</span></div></div>
+<div class="scope-row"><span class="dot" style="background:var(--yellow)"></span><div><strong>Profundidad parcial</strong><span>Aún sin representantes, socios ni domicilio exacto materializados</span></div></div>
+</div>
+</section>
+<div class="filterbar">
+<div class="select-wrap"><label>Región activa</label><select id="regionSelect"></select></div>
+<span class="subtle" id="regionContext">Vista nacional</span>
+</div>
+<section class="tabscreen active" id="pulso">
+<div class="kpis" id="kpis">
+<div class="card kpi"><div class="label">Universo RES</div><div class="value">1.609.372</div><div class="delta">Sociedades únicas en la réplica</div></div>
+<div class="card kpi"><div class="label">Constituciones 2026</div><div class="value">129.213</div><div class="delta">Ene–jul · +13,0% vs 2025</div></div>
+<div class="card kpi"><div class="label">SpA 2026</div><div class="value">79,7%</div><div class="delta">Participación sobre constituciones YTD</div></div>
+<div class="card kpi"><div class="label">Capital mediano</div><div class="value">$1.500.000</div><div class="delta">Toda la base disponible</div></div>
+<div class="card kpi"><div class="label">Corte de datos</div><div class="value" style="font-size:22px">31·07·2026</div><div class="delta">Último snapshot RES cargado</div></div>
+</div>
+<div class="grid-2">
+<div class="card">
+<div class="card-head"><div><h3>Constituciones por año</h3><p>2026 corresponde a enero–julio; no es una proyección.</p></div><span class="mini-tag">2013–2026</span></div>
+<div class="chart" id="annualChart"><div class="subtle">Cargando serie 2013–2026…</div></div>
+</div>
+<div class="card">
+<div class="card-head"><div><h3>Composición societaria</h3><p>Constituciones enero–julio 2026.</p></div><span class="mini-tag">Tipo</span></div>
+<div class="chart" id="typeChart"><div class="subtle">Cargando composición societaria…</div></div>
+</div>
+</div>
+<div class="grid-2 equal">
+<div class="card">
+<div class="card-head"><div><h3>Pulso semanal reciente</h3><p>Constituciones nacionales por semana, mayo–julio 2026.</p></div><span class="mini-tag">13 semanas</span></div>
+<div class="chart" id="weeklyChart"><div class="subtle">Cargando pulso semanal…</div></div>
+</div>
+<div class="card">
+<div class="card-head"><div><h3>Lectura ejecutiva</h3><p>Señales descriptivas de la base actual.</p></div></div>
+<div id="executiveRead"></div>
+</div>
+</div>
+</section>
+<section class="tabscreen" id="territorio">
+<div class="region-layout">
+<div class="card">
+<div class="card-head"><div><h3>Cartograma regional 2026</h3><p>Intensidad según constituciones ene–jul. Haz clic en una región.</p></div></div>
+<div class="cartogram" id="cartogram"></div>
+</div>
+<div>
+<div class="grid-2 equal">
+<div class="card">
+<div class="card-head"><div><h3 id="regionTitle">Región Metropolitana</h3><p>Enero–julio 2026 versus mismo período 2025.</p></div></div>
+<div id="regionHeadline"></div>
+<div class="chart" id="regionLine" style="min-height:230px"></div>
+</div>
+<div class="card">
+<div class="card-head"><div><h3>Principales comunas</h3><p>Constituciones ene–julio 2026.</p></div></div>
+<div class="commune-list" id="communes"></div>
+</div>
+</div>
+<div class="card">
+<div class="card-head"><div><h3>Comparador regional</h3><p>Ordenable por volumen o variación interanual.</p></div>
+<div class="control-row"><button class="btn" id="sortVolume">Volumen</button><button class="btn" id="sortGrowth">Variación</button></div>
+</div>
+<div class="table-wrap"><table><thead><tr><th>#</th><th>Región</th><th>2026 YTD</th><th>2025 YTD</th><th>Var.</th><th>Capital mediano</th></tr></thead><tbody id="regionTable"></tbody></table></div>
+</div>
+</div>
+</div>
+</section>
+<section class="tabscreen" id="fenomenos">
+<div class="methods">
+<div class="method"><strong>Aceleración territorial</strong><p>Compara un mes regional de 2026 con el mismo mes observado entre 2022–2025.</p></div>
+<div class="method"><strong>Z-score exploratorio</strong><p>Cuantifica cuánto se aparta el volumen del promedio histórico comparable.</p></div>
+<div class="method"><strong>Cluster constitutivo</strong><p>Misma fecha + comuna + tipo societario + capital. Es concentración descriptiva.</p></div>
+<div class="method"><strong>No es alerta AML</strong><p>Ninguna señal de esta demo implica irregularidad ni sospecha por sí sola.</p></div>
+</div>
+<div class="grid-2 equal" style="margin-top:16px">
+<div class="card">
+<div class="card-head"><div><h3>Anomalías regionales 2026</h3><p>Base: mismo mes de 2022–2025. Muestra exploratoria.</p></div>
+<div class="range"><span>z ≥</span><input id="zRange" max="5" min="1.5" step=".25" type="range" value="3"/><b id="zVal">3.00</b></div>
+</div>
+<div class="table-wrap"><table><thead><tr><th>Región / mes</th><th>Actual</th><th>Base</th><th>Δ</th><th>z</th></tr></thead><tbody id="anomalyTable"></tbody></table></div>
+</div>
+<div class="card">
+<div class="card-head"><div><h3>Clusters recientes</h3><p>Mayo–julio 2026. Abre una fila para ver ejemplos.</p></div>
+<div class="control-row"><div class="range"><span>n ≥</span><input id="clusterRange" max="30" min="10" step="1" type="range" value="15"/><b id="clusterVal">15</b></div></div>
+</div>
+<div class="control-row" style="margin-bottom:10px"><input class="search" id="clusterSearch" placeholder="Buscar comuna, región o sociedad…" type="text"/><button class="btn" id="exportClusters">Exportar CSV</button></div>
+<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Comuna</th><th>Tipo</th><th>Capital</th><th>n</th></tr></thead><tbody id="clusterTable"></tbody></table></div>
+</div>
+</div>
+<div class="notice">Interpretación: un cluster grande puede responder a patrones completamente normales de constitución, capitales estándar o concentración geográfica. La utilidad de esta capa es priorizar exploración, no calificar conducta.</div>
+</section>
+<section class="tabscreen" id="estructura">
+<div class="data-grid">
+<div class="data-tile"><span class="status pos">Disponible</span><h4>Sociedades / RUT</h4><p>1.609.372 entidades únicas con fecha de constitución y tipo societario.</p></div>
+<div class="data-tile"><span class="status pos">Disponible</span><h4>Territorio</h4><p>Región y comuna social/tributaria para analítica territorial.</p></div>
+<div class="data-tile"><span class="status pos">Disponible</span><h4>Capital</h4><p>Capital materializado para toda la tabla base disponible.</p></div>
+<div class="data-tile"><span class="status warn">Preparado / vacío</span><h4>Representantes y socios</h4><p>La estructura de relaciones existe, pero aún no contiene registros.</p></div>
+<div class="data-tile"><span class="status warn">Parcial</span><h4>Domicilio</h4><p>Comuna/región disponibles; texto de calle y número todavía no materializado.</p></div>
+<div class="data-tile"><span class="status warn">Pendiente</span><h4>Actuaciones posteriores</h4><p>La capa actual contiene constituciones; falta poblar modificaciones, poderes y otros hitos.</p></div>
+</div>
+<div class="grid-2 equal" style="margin-top:16px">
+<div class="card">
+<div class="card-head"><div><h3>Capital por tipo societario</h3><p>Mediana enero–julio 2026.</p></div></div>
+<div id="capitalType"></div>
+</div>
+<div class="card locked">
+<div class="locked-inner">
+<div class="card-head"><h3>Red societaria</h3></div>
+<svg height="280" viewbox="0 0 500 280" width="100%">
+<g opacity=".7" stroke="#6b879d" stroke-width="1.5">
+<line x1="250" x2="120" y1="70" y2="170"></line><line x1="250" x2="250" y1="70" y2="190"></line><line x1="250" x2="390" y1="70" y2="160"></line>
+<line x1="120" x2="250" y1="170" y2="190"></line><line x1="390" x2="250" y1="160" y2="190"></line>
+</g>
+<g fill="#20384c" stroke="#8da4b7"><circle cx="250" cy="70" r="28"></circle><circle cx="120" cy="170" r="24"></circle><circle cx="250" cy="190" r="24"></circle><circle cx="390" cy="160" r="24"></circle></g>
+</svg>
+</div>
+<div class="lock-overlay"><div class="lock-box"><div class="lock-icon">⌁</div><h3>Red societaria aún no habilitada</h3><p class="subtle">Para construirla con rigor necesitamos poblar <b>representantes, administradores, socios/accionistas y domicilios exactos</b>. La demo no fabrica esos vínculos.</p></div></div>
+</div>
+</div>
+</section>
+<div class="foot">Demo autónoma v1.1 · no modifica Atlas · snapshot RES con corte 31 de julio de 2026 · datos reales agregados y analítica descriptiva/exploratoria.</div>
+</main>
+</div>
+<div class="tooltip" id="tooltip"></div>
+<div class="drawer" id="drawer">
+<button class="btn close" onclick="closeDrawer()">Cerrar</button>
+<div class="eyebrow">Detalle de cluster</div>
+<h2 id="drawerTitle"></h2>
+<div class="subtle" id="drawerMeta"></div>
+<div class="drawer-list" id="drawerNames"></div>
+<div class="notice" style="margin-top:16px">Estos son ejemplos de sociedades dentro de una combinación coincidente de fecha, comuna, tipo y capital. No implica que compartan representante, domicilio exacto ni relación entre sí.</div>
+</div>
+<script src="data.js"></script><script src="app.js"></script></body>
+</html>
