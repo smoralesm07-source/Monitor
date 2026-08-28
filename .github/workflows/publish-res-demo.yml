@@ -48,7 +48,14 @@ jobs:
           test -s res-demo/index.html
           test -s res-demo/app.js
           test -s res-demo/data.js
+          test -s res-demo/insights.js
           test -s res-demo/style.css
+
+          node --check res-demo/app.js
+          node --check res-demo/data.js
+          node --check res-demo/insights.js
+          grep -q 'Fenómenos emergentes' res-demo/index.html
+          grep -q 'chileMap' res-demo/index.html
 
           cp _state/datos.json datos.json
           python3 construye_sitio.py
@@ -63,6 +70,7 @@ jobs:
           test -s public/res-demo/index.html
           test -s public/res-demo/app.js
           test -s public/res-demo/data.js
+          test -s public/res-demo/insights.js
           echo 'Demo RES integrada al artefacto Pages.'
 
       - name: Subir artefacto de Pages
