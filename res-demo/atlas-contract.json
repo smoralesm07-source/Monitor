@@ -1,17 +1,32 @@
 {
   "module": "res_societary_dynamics",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "status": "atlas_candidate_final",
   "source_scope": "RES_only",
   "cutoff": "2026-07-31",
   "views": [
     {"id":"pulso","label":"Pulso","purpose":"Contexto nacional, evolución, composición y momentum"},
     {"id":"territorio","label":"Territorio","purpose":"Cambio regional/comunal y priorización territorial explicable"},
-    {"id":"fenomenos","label":"Fenómenos","purpose":"Emergencia, persistencia, recurrencia y patrones semánticos observables"}
+    {"id":"fenomenos","label":"Fenómenos","purpose":"Emergencia, persistencia, recurrencia, patrones semánticos y drill-down a sociedades"}
   ],
   "required_source": {
     "table": "aml_res_company",
-    "fields": ["rut_key","legal_name","constitution_date","source_year","source_month","social_commune","social_region","tax_commune","tax_region","company_code","capital"]
+    "fields": ["rut","rut_key","legal_name","constitution_date","registry_date","sii_approval_date","source_year","source_month","social_commune","social_region","tax_commune","tax_region","company_code","capital"]
+  },
+  "entity_drilldown": {
+    "search_keys": ["rut","legal_name"],
+    "raw_fields": ["rut","legal_name","company_code","capital","constitution_date","registry_date","sii_approval_date","social_commune","social_region","tax_commune","tax_region"],
+    "derived_fields": {
+      "lag_registry_days": "registry_date - constitution_date",
+      "lag_sii_days": "sii_approval_date - constitution_date",
+      "territory_alignment": "social_commune/region == tax_commune/region",
+      "capital_vs_type_median": "capital / mediana capital por company_code en ventana comparable",
+      "standard_capital_flag": "capital pertenece al catálogo de montos recurrentes",
+      "cohort_size": "count(*) para misma constitution_date + social_commune + company_code + capital",
+      "lexical_tags": "tokens de legal_name presentes en vocabulario emergente"
+    },
+    "atlas_behavior": "búsqueda sobre universo completo de aml_res_company y apertura de ficha por RUT",
+    "demo_behavior": "muestra navegable real asociada a fenómenos; no representa límite del diseño"
   },
   "derived_metrics": {
     "ytd_growth": "(ytd_current - ytd_previous) / ytd_previous",
@@ -19,7 +34,7 @@
     "yoy_30d": "(last_30d - same_window_previous_year) / same_window_previous_year",
     "seasonal_z": "z-score exploratorio contra mismo mes histórico",
     "recurrence_cluster": "misma fecha + comuna + tipo societario + capital; luego persistencia por múltiples días",
-    "standard_capital_share": "participación de capitales 1m/2m/5m/10m",
+    "standard_capital_share": "participación de capitales recurrentes definidos metodológicamente",
     "vocabulary_lift": "frecuencia reciente de token de razón social versus ventana previa con suavizado",
     "ice_res": "índice 0-100 para priorizar magnitud de cambio; no mide riesgo AML"
   },
@@ -28,7 +43,9 @@
   "integration_rules": [
     "No consumir aml_res_relationship ni tablas de personas.",
     "Mantener RES como única fuente del módulo.",
-    "Mostrar fecha de corte en todas las vistas.",
+    "La ficha individual debe distinguir dato bruto, derivado y contexto de cohorte.",
+    "La búsqueda de entidades en Atlas debe operar sobre aml_res_company completo; la muestra embebida es solo de demo.",
+    "Mostrar fecha de corte y proveniencia.",
     "Toda priorización debe conservar componentes explicables.",
     "No usar etiquetas de sospecha, alerta AML o riesgo LA/FT."
   ]
