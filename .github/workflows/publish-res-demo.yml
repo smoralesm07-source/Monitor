@@ -1,0 +1,65 @@
+name: Publicar demo RES junto al Monitor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'res-demo/**'
+      - '.github/workflows/publish-res-demo.yml'
+  workflow_run:
+    workflows: ['Actualizar y publicar monitor UAF']
+    types: [completed]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    if: github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Descargar rama principal
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Recuperar último sitio generado
+        uses: actions/checkout@v6
+        with:
+          ref: monitor-state
+          path: _state
+
+      - name: Integrar demo RES al artefacto publicado
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s _state/public/index.html
+          test -s res-demo/index.html
+          test -s res-demo/app.js
+          test -s res-demo/data.js
+          test -s res-demo/style.css
+          rm -rf public
+          cp -a _state/public public
+          rm -rf public/res-demo
+          cp -a res-demo public/res-demo
+          touch public/.nojekyll
+          test -s public/res-demo/index.html
+          echo 'Demo RES integrada al sitio Pages.'
+
+      - name: Subir artefacto de Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Publicar en GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
