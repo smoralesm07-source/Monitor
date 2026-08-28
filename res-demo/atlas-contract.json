@@ -1,17 +1,38 @@
 {
   "module": "res_societary_dynamics",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "status": "atlas_candidate_final",
   "source_scope": "RES_only",
   "cutoff": "2026-07-31",
   "views": [
     {"id":"pulso","label":"Pulso","purpose":"Contexto nacional, evolución, composición y momentum"},
     {"id":"territorio","label":"Territorio","purpose":"Cambio regional/comunal y priorización territorial explicable"},
-    {"id":"fenomenos","label":"Fenómenos","purpose":"Emergencia, persistencia, recurrencia, patrones semánticos y drill-down a sociedades"}
+    {"id":"fenomenos","label":"Fenómenos","purpose":"Señales accionables, filtros sobre nómina societaria y ficha individual"}
   ],
   "required_source": {
     "table": "aml_res_company",
     "fields": ["rut","rut_key","legal_name","constitution_date","registry_date","sii_approval_date","source_year","source_month","social_commune","social_region","tax_commune","tax_region","company_code","capital"]
+  },
+  "interactive_filters": {
+    "bubble_to_entities": "clic en fenómeno filtra nómina por cohortes societarias observables asociadas",
+    "critical_date_to_entities": "clic en fecha filtra constitution_date",
+    "critical_commune_to_entities": "clic en comuna filtra social_commune",
+    "name_family_to_entities": "clic en familia filtra conjunto de RUTs identificados por patrón de denominación",
+    "row_to_ficha": "clic en fila abre ficha RES granular"
+  },
+  "support_signals": {
+    "critical_dates": {
+      "definition": "conteo diario comparado con baseline histórico del mismo mes y mismo día de semana",
+      "baseline": "2022-2025",
+      "threshold": "|z| >= 2 para apoyo exploratorio",
+      "calendar_control": "marcar feriados conocidos; una caída de constituciones no equivale a baja/disolución societaria"
+    },
+    "critical_communes": "combina volumen reciente, momentum 30d y comparación interanual; no es riesgo",
+    "similar_legal_names": {
+      "scope": "cohortes con misma fecha + comuna + tipo + capital",
+      "methods": ["denominación normalizada idéntica","serie léxica con prefijo/raíz común","similitud trigram como apoyo exploratorio"],
+      "meaning": "similitud de nombre no implica vínculo societario"
+    }
   },
   "entity_drilldown": {
     "search_keys": ["rut","legal_name"],
@@ -25,8 +46,8 @@
       "cohort_size": "count(*) para misma constitution_date + social_commune + company_code + capital",
       "lexical_tags": "tokens de legal_name presentes en vocabulario emergente"
     },
-    "atlas_behavior": "búsqueda sobre universo completo de aml_res_company y apertura de ficha por RUT",
-    "demo_behavior": "muestra navegable real asociada a fenómenos; no representa límite del diseño"
+    "atlas_behavior": "tabla filtrable sobre universo completo de aml_res_company y apertura de ficha por RUT",
+    "demo_behavior": "muestra real navegable ampliada para probar filtros; no representa límite del diseño"
   },
   "derived_metrics": {
     "ytd_growth": "(ytd_current - ytd_previous) / ytd_previous",
@@ -38,15 +59,15 @@
     "vocabulary_lift": "frecuencia reciente de token de razón social versus ventana previa con suavizado",
     "ice_res": "índice 0-100 para priorizar magnitud de cambio; no mide riesgo AML"
   },
-  "phenomenon_states": ["emerging","structural","persistent","cooling","watch"],
-  "excluded_by_design": ["socios","accionistas","representantes","administradores","personas_naturales","relaciones_persona_sociedad","beneficiario_final","inferencias_aml"],
+  "excluded_by_design": ["socios","accionistas","representantes","administradores","personas_naturales","relaciones_persona_sociedad","beneficiario_final","inferencias_aml","disoluciones_no_cargadas"],
   "integration_rules": [
     "No consumir aml_res_relationship ni tablas de personas.",
     "Mantener RES como única fuente del módulo.",
+    "No llamar bajas societarias a caídas de constituciones; disoluciones no están disponibles en la réplica actual.",
+    "Toda visualización analítica debe poder aterrizar a nómina o explicar por qué no existe granularidad individual.",
     "La ficha individual debe distinguir dato bruto, derivado y contexto de cohorte.",
-    "La búsqueda de entidades en Atlas debe operar sobre aml_res_company completo; la muestra embebida es solo de demo.",
+    "La búsqueda y filtros en Atlas deben operar sobre aml_res_company completo; la muestra embebida es solo de demo.",
     "Mostrar fecha de corte y proveniencia.",
-    "Toda priorización debe conservar componentes explicables.",
     "No usar etiquetas de sospecha, alerta AML o riesgo LA/FT."
   ]
 }

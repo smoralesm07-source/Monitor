@@ -4,8 +4,9 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Analizador RES · Candidato Atlas</title>
-<link rel="stylesheet" href="style.css?v=5.0.0"/>
-<link rel="stylesheet" href="entity.css?v=5.0.0"/>
+<link rel="stylesheet" href="style.css?v=6.0.0"/>
+<link rel="stylesheet" href="entity.css?v=6.0.0"/>
+<link rel="stylesheet" href="support.css?v=6.0.0"/>
 </head>
 <body>
 <div class="app-shell">
@@ -48,24 +49,31 @@
 </section>
 
 <section class="screen" id="fenomenos">
-  <div class="section-title"><div><div class="eyebrow">INTELIGENCIA SOCIETARIA</div><h2>Fenómenos observables</h2><p>Las señales se interpretan por <b>intensidad, persistencia, alcance y dirección</b>. Al abrir una señal podrás examinar sociedades concretas y sus fichas RES.</p></div><div class="micro-context"><b id="entitySampleCount">35</b><span>sociedades navegables en demo</span></div></div>
+  <div class="section-title"><div><div class="eyebrow">INTELIGENCIA SOCIETARIA</div><h2>Fenómenos observables</h2><p>Las señales se interpretan por <b>intensidad, persistencia, alcance y dirección</b>. Al abrir una señal podrás examinar sociedades concretas y sus fichas RES.</p></div><div class="micro-context"><b id="entitySampleCount">—</b><span>sociedades navegables en demo</span></div></div>
   <div class="kpi-grid" id="phenomenonKpis"></div>
   <article class="card phenomenon-board"><div class="card-head"><div><h3>Qué merece atención ahora</h3><p>Prioridades generadas por convergencia de evidencia temporal y estructural disponible.</p></div><span class="tag">clic → fenómeno → sociedades → ficha</span></div><div class="phenomenon-grid" id="phenomenonBoard"></div></article>
-  <div class="grid grid-2 phenomenon-mid"><article class="card"><div class="card-head"><div><h3>Matriz intensidad × persistencia</h3><p>Burbuja mayor = mayor alcance. Arriba/derecha = patrón más consolidado.</p></div></div><div class="phenomenon-scatter" id="phenomenonScatter"></div></article><article class="card"><div class="card-head"><div><h3>Ciclo de las señales</h3><p>Distingue señales emergentes, persistentes, estructurales, en enfriamiento o todavía débiles.</p></div></div><div class="lifecycle" id="lifecycleLanes"></div></article></div>
+  <div class="grid grid-2 phenomenon-mid"><article class="card bubble-filter-card"><div class="card-head"><div><h3>Matriz intensidad × persistencia</h3><p><b>Las burbujas ahora filtran la nómina.</b> Tamaño = alcance; posición = intensidad y persistencia.</p></div><span class="tag">clic → filtrar entidades</span></div><div class="phenomenon-scatter" id="phenomenonScatter"></div><div class="bubble-filter-hint" id="bubbleFilterHint">Selecciona una burbuja para llevar sus sociedades a la tabla inferior.</div></article><article class="card"><div class="card-head"><div><h3>Ciclo de las señales</h3><p>Distingue señales emergentes, persistentes, estructurales, en enfriamiento o todavía débiles.</p></div></div><div class="lifecycle" id="lifecycleLanes"></div></article></div>
   <div class="grid grid-3"><article class="card"><div class="card-head"><div><h3>Aceleraciones comunales</h3><p>Últimos 30 días vs. 30 previos y mismo período 2025.</p></div></div><div class="table-wrap short"><table><thead><tr><th>Comuna</th><th>30d</th><th>Momentum</th><th>a/a</th><th>Estado</th></tr></thead><tbody id="accelTable"></tbody></table></div></article><article class="card"><div class="card-head"><div><h3>Recurrencia constitutiva</h3><p>Misma comuna + tipo + capital repetida en múltiples días.</p></div></div><div class="table-wrap short"><table><thead><tr><th>Patrón</th><th>Días</th><th>Sociedades</th><th>Máx/día</th></tr></thead><tbody id="recurrentTable"></tbody></table></div></article><article class="card"><div class="card-head"><div><h3>Vocabulario emergente</h3><p>Palabras de razones sociales con aumento reciente. No equivale a actividad económica validada.</p></div></div><div class="vocab-cloud" id="vocabList"></div></article></div>
-  <article class="card entity-explorer-card"><div class="card-head"><div><h3>Sociedades detrás de las señales</h3><p>Muestra real para evaluar el diseño de ficha. En Atlas, el mismo componente consultará el universo completo de <code>aml_res_company</code>.</p></div><div class="entity-filter-tabs" id="entityFilterTabs"><button class="active" data-cohort="all">Todas</button><button data-cohort="MACUL_SPA_5M">Macul</button><button data-cohort="HUECHURABA">Huechuraba</button><button data-cohort="ARICA">Arica</button><button data-cohort="VICTORIA">Victoria</button></div></div><div class="entity-list-grid" id="entityExplorer"></div></article>
+  <div class="support-grid">
+    <article class="card support-card"><div class="card-head"><div><h3>Fechas críticas</h3><p>Picos y caídas de constituciones contra baseline de mismo mes + día de semana.</p></div><span class="tag">caída ≠ baja societaria</span></div><div id="criticalDates" class="support-list"></div></article>
+    <article class="card support-card"><div class="card-head"><div><h3>Comunas críticas</h3><p>Prioriza escala, aceleración reciente y comparación interanual.</p></div><span class="tag">clic → filtrar</span></div><div id="criticalCommunes" class="support-list"></div></article>
+    <article class="card support-card"><div class="card-head"><div><h3>Razones sociales parecidas</h3><p>Series léxicas y denominaciones idénticas dentro de cohortes de constitución.</p></div><span class="tag">RES observable</span></div><div id="similarNames" class="support-list"></div></article>
+  </div>
+  <article class="card entity-explorer-card"><div class="card-head"><div><h3>Nómina de sociedades</h3><p>La tabla responde a burbujas, fechas, comunas, recurrencias y familias de razón social. Clic en una fila abre la ficha RES.</p></div><div class="entity-table-actions"><span class="filter-pill" id="entityFilterLabel">Todas las sociedades navegables</span><button class="btn subtle" id="entityClearFilter">Limpiar filtro</button></div></div><div class="entity-table-summary"><b id="entityTableCount">0</b><span>entidades en la selección actual</span><small id="entityTableContext">Muestra navegable de la demo; Atlas consultará el universo completo.</small></div><div class="table-wrap entity-table-wrap"><table class="entity-table"><thead><tr><th>RUT</th><th>Razón social</th><th>Tipo</th><th>Constitución</th><th>Comuna</th><th>Capital</th><th>Cohorte</th><th>Caracterización</th></tr></thead><tbody id="entityExplorer"></tbody></table></div></article>
   <div class="notice"><b>Regla metodológica:</b> la ficha caracteriza sociedades con datos brutos y derivados de RES. No infiere actividad económica, vínculo entre sociedades, irregularidad ni riesgo LA/FT.</div>
 </section>
-<footer>Analizador RES · candidato Atlas v5.0 · exclusivamente información societaria observable · corte 31 julio 2026.</footer>
+<footer>Analizador RES · candidato Atlas v6.0 · exclusivamente información societaria observable · corte 31 julio 2026.</footer>
 </main>
 </div>
 <div class="tooltip" id="tooltip"></div>
 <aside class="drawer" id="drawer"><button class="btn drawer-close" id="drawerClose">Cerrar</button><div class="eyebrow" id="drawerEyebrow">DETALLE</div><h2 id="drawerTitle"></h2><p class="muted" id="drawerLead"></p><div id="drawerBody"></div></aside>
 <aside class="entity-drawer" id="entityDrawer"><button class="btn drawer-close" id="entityDrawerClose">Cerrar</button><div class="eyebrow">FICHA SOCIETARIA RES</div><div id="entityDrawerBody"></div></aside>
-<script src="data.js?v=5.0.0"></script>
-<script src="insights.js?v=5.0.0"></script>
-<script src="entities.js?v=5.0.0"></script>
-<script src="app.js?v=5.0.0"></script>
-<script src="entity-app.js?v=5.0.0"></script>
+<script src="data.js?v=6.0.0"></script>
+<script src="insights.js?v=6.0.0"></script>
+<script src="entities.js?v=6.0.0"></script>
+<script src="support-entities.js?v=6.0.0"></script>
+<script src="support.js?v=6.0.0"></script>
+<script src="app.js?v=6.0.0"></script>
+<script src="entity-app.js?v=6.0.0"></script>
 </body>
 </html>
