@@ -1,40 +1,55 @@
-# Analizador RES v4.0 — contrato de integración Atlas
+# Analizador RES v5.0 — contrato de integración Atlas
 
 ## Estado
 Candidato final para integración, pendiente de aprobación. La demo continúa separada de Atlas.
 
-## Alcance funcional
-El módulo se limita a fenómenos observables con la réplica RES actualmente cargada:
+## Cambio principal de v5
+La portada introductoria fue eliminada. La navegación parte directamente en la analítica y agrega **drill-down de sociedad**: desde fenómenos, comunas y recurrencias se puede abrir una ficha individual RES.
 
-- volumen y evolución temporal de constituciones;
+## Alcance funcional
+El módulo sigue limitado a `aml_res_company` y a fenómenos observables:
+- volumen y evolución temporal;
 - región y comuna;
 - tipo societario;
 - capital declarado;
-- recurrencia de combinaciones fecha + comuna + tipo + capital;
+- fechas de constitución, registro y aprobación SII;
+- recurrencia fecha + comuna + tipo + capital;
 - desviaciones temporales;
-- patrones de razón social y vocabulario emergente.
+- patrones de razón social;
+- caracterización individual de sociedades y contexto de cohorte.
+
+## Ficha societaria
+La ficha debe mostrar tres capas:
+
+1. **Dato bruto RES**: RUT, razón social, tipo, capital, fechas, territorio social y tributario.
+2. **Caracterización derivada**: rezago constitución→registro, rezago constitución→SII, capital vs. mediana del tipo, capital recurrente y consistencia territorial.
+3. **Contexto de cohorte**: número de sociedades que comparten fecha + comuna + tipo + capital, más tokens de razón social vinculados al vocabulario emergente.
+
+La ficha no infiere giro, vínculo, irregularidad ni riesgo.
+
+## Búsqueda
+En Atlas, la barra de búsqueda debe consultar el universo completo de `aml_res_company` por RUT o razón social, con sugerencias mientras se escribe. La demo usa una muestra real de sociedades asociadas a fenómenos actuales para evaluar experiencia de usuario.
 
 ## Exclusiones de diseño
 No se incorporan ni se consultan socios, accionistas, representantes, administradores, personas naturales, relaciones persona–sociedad ni beneficiario final. Tampoco se generan inferencias AML.
 
 ## Vistas
-1. **Pulso**: panorama nacional, serie histórica, mezcla societaria y momentum.
-2. **Territorio**: mapa regional, lectura de ciclo, aceleraciones comunales y matriz ICE-RES.
-3. **Fenómenos**: señales emergentes, persistentes, estructurales, en enfriamiento y de vigilancia; recurrencia constitutiva y vocabulario emergente.
+1. **Pulso**.
+2. **Territorio**.
+3. **Fenómenos**, incluyendo ficha societaria como drill-down transversal.
 
 ## Fuente mínima
-`aml_res_company` con:
-`rut_key`, `legal_name`, `constitution_date`, `source_year`, `source_month`, `social_commune`, `social_region`, `tax_commune`, `tax_region`, `company_code`, `capital`.
-
-El módulo no requiere `aml_res_relationship`.
+`aml_res_company`:
+`rut`, `rut_key`, `legal_name`, `constitution_date`, `registry_date`, `sii_approval_date`, `source_year`, `source_month`, `social_commune`, `social_region`, `tax_commune`, `tax_region`, `company_code`, `capital`.
 
 ## Integración propuesta
 Al aprobarse:
-1. portar las tres vistas a los componentes visuales de Atlas;
-2. mantener la lógica de cálculo como capa RES independiente;
-3. publicar agregados/flags normalizados para consumo de interfaz;
-4. conservar fecha de corte y ayuda metodológica;
-5. validar paridad de resultados entre demo y Atlas antes de habilitar al usuario.
+1. portar las tres vistas al estándar visual Atlas;
+2. implementar consultas agregadas RES en backend;
+3. implementar búsqueda por RUT/razón social y detalle por RUT;
+4. calcular cohortes y métricas derivadas en backend o vistas materializadas;
+5. conservar ayuda metodológica y fecha de corte;
+6. validar paridad de indicadores y fichas entre demo y Atlas antes de habilitar el módulo.
 
 ## Principio metodológico
-ICE-RES y los estados de fenómeno ordenan revisión analítica. No son un score de riesgo ni una calificación de irregularidad.
+ICE-RES, los estados de fenómeno y la caracterización de ficha ordenan la exploración. No son score de riesgo ni calificación de irregularidad.
