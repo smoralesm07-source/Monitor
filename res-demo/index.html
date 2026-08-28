@@ -4,25 +4,27 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Analizador RES · Candidato Atlas</title>
-<link rel="stylesheet" href="style.css?v=4.0.0"/>
+<link rel="stylesheet" href="style.css?v=5.0.0"/>
+<link rel="stylesheet" href="entity.css?v=5.0.0"/>
 </head>
 <body>
 <div class="app-shell">
 <header class="topbar">
   <div class="topbar-main">
-    <div class="brand"><div class="brand-mark"><span></span></div><div><strong>ANALIZADOR RES</strong><small>Candidato final para Atlas · inteligencia societaria</small></div></div>
-    <div class="status-group"><span class="status solo">SOLO RES</span><span class="status ok" id="healthBadge">Datos operativos</span><span class="status">Corte 31·07·2026</span><span class="status">1.609.372 sociedades</span></div>
+    <div class="brand"><div class="brand-mark"><span></span></div><div><strong>ANALIZADOR RES</strong><small>Dinámica societaria observable · candidato Atlas</small></div></div>
+    <div class="entity-search-shell">
+      <span class="search-icon">⌕</span>
+      <input id="entitySearch" type="search" autocomplete="off" placeholder="Buscar sociedad por RUT o razón social…"/>
+      <span class="search-hint">ficha RES</span>
+      <div class="search-results" id="entitySearchResults"></div>
+    </div>
+    <div class="status-group"><span class="status solo">SOLO RES</span><span class="status ok" id="healthBadge">Datos operativos</span><span class="status">Corte 31·07·2026</span></div>
   </div>
   <nav class="nav"><button class="active" data-screen="pulso">Pulso</button><button data-screen="territorio">Territorio</button><button data-screen="fenomenos">Fenómenos</button></nav>
 </header>
 <main>
-<section class="intro-panel">
-  <div><div class="eyebrow">REGISTRO DE EMPRESAS Y SOCIEDADES</div><h1>Dinámica y fenómenos societarios observables</h1><p>Versión final acotada a lo que la réplica RES permite medir hoy: <b>volumen, temporalidad, territorio, tipo societario, capital, recurrencia de constitución y patrones de razón social</b>. No utiliza ni presenta socios, accionistas, representantes, administradores ni relaciones persona–sociedad.</p></div>
-  <div class="intro-side"><div><span class="dot green"></span><b>Alcance cerrado</b><small>Solo señales reproducibles con datos actualmente disponibles.</small></div><div><span class="dot amber"></span><b>Preparado para Atlas</b><small>Tres vistas, metodología explícita y contrato de integración versionado.</small></div></div>
-</section>
-
 <section class="screen active" id="pulso">
-  <div class="section-title"><div><div class="eyebrow">PANORAMA NACIONAL</div><h2>Pulso societario</h2><p>Contexto estructural y lectura reciente de la constitución de sociedades.</p></div></div>
+  <div class="section-title"><div><div class="eyebrow">REGISTRO DE EMPRESAS Y SOCIEDADES</div><h2>Pulso societario</h2><p>Contexto estructural y lectura reciente de la constitución de sociedades.</p></div><div class="micro-context"><b>1.609.372</b><span>sociedades en réplica</span></div></div>
   <div class="kpi-grid" id="pulsoKpis"></div>
   <div class="grid grid-2 wide-left">
     <article class="card"><div class="card-head"><div><h3>Constituciones por año</h3><p>Serie estructural 2013–2026.</p></div><span class="tag">2026 parcial · ene–jul</span></div><div class="chart" id="annualChart"></div></article>
@@ -36,31 +38,34 @@
 </section>
 
 <section class="screen" id="territorio">
-  <div class="section-title with-controls"><div><div class="eyebrow">GEOGRAFÍA DEL CAMBIO</div><h2>Territorio</h2><p>La intensidad del mapa cambia según la métrica seleccionada. Volumen, crecimiento y aceleración no son equivalentes.</p></div><div class="control-cluster"><label>Región<select id="regionSelect"></select></label></div></div>
+  <div class="section-title with-controls"><div><div class="eyebrow">GEOGRAFÍA DEL CAMBIO</div><h2>Territorio</h2><p>Volumen, crecimiento y aceleración son lecturas distintas. Selecciona una región o haz clic en el mapa.</p></div><div class="control-cluster"><label>Región<select id="regionSelect"></select></label></div></div>
   <div class="kpi-grid" id="territoryKpis"></div>
   <div class="grid territory-main">
-    <article class="card map-card"><div class="card-head map-head"><div><h3>Chile · dinámica regional</h3><p>Mapa regional interactivo. Haz clic para profundizar.</p></div></div><div class="metric-tabs" id="mapMetricTabs"><button class="active" data-metric="volume">Volumen</button><button data-metric="growth">Crecimiento YTD</button><button data-metric="momentum">Momentum 30d</button><button data-metric="change">ICE-RES</button></div><div class="real-map" id="chileMap"><div class="map-loading">Cargando geometría regional…</div></div><div class="map-legend" id="mapLegend"></div><div class="map-source">Geometría continental: chile-map-geojson · OpenStreetMap/polygons.openstreetmap.fr.</div></article>
-    <div class="territory-side"><article class="card"><div class="card-head"><div><h3 id="regionTitle">Chile</h3><p id="regionSub">Lectura nacional y focos territoriales.</p></div><span class="state-chip" id="regionState">Sistema</span></div><div id="regionNarrative"></div><div class="chart compact" id="regionLine"></div></article><article class="card"><div class="card-head"><div><h3>Comunas que están cambiando</h3><p>Prioriza aceleración reciente corroborada por comparación interanual.</p></div></div><div class="signal-list" id="communeEmerging"></div></article></div>
+    <article class="card map-card"><div class="card-head map-head"><div><h3>Chile · dinámica regional</h3><p>Mapa regional interactivo.</p></div></div><div class="metric-tabs" id="mapMetricTabs"><button class="active" data-metric="volume">Volumen</button><button data-metric="growth">Crecimiento YTD</button><button data-metric="momentum">Momentum 30d</button><button data-metric="change">ICE-RES</button></div><div class="real-map" id="chileMap"><div class="map-loading">Cargando geometría regional…</div></div><div class="map-legend" id="mapLegend"></div><div class="map-source">Geometría continental: chile-map-geojson · OpenStreetMap/polygons.openstreetmap.fr.</div></article>
+    <div class="territory-side"><article class="card"><div class="card-head"><div><h3 id="regionTitle">Chile</h3><p id="regionSub">Lectura nacional y focos territoriales.</p></div><span class="state-chip" id="regionState">Sistema</span></div><div id="regionNarrative"></div><div class="chart compact" id="regionLine"></div></article><article class="card"><div class="card-head"><div><h3>Comunas que están cambiando</h3><p>Cada señal permite bajar a sociedades concretas disponibles en la muestra.</p></div></div><div class="signal-list" id="communeEmerging"></div></article></div>
   </div>
   <article class="card"><div class="card-head"><div><h3>Matriz territorial</h3><p>Escala, crecimiento, momentum, composición, concentración y desviación histórica.</p></div><span class="tag">ICE-RES = prioridad de cambio, no riesgo</span></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Región</th><th>2026 YTD</th><th>Δ YTD</th><th>Momentum 30d</th><th>Δ 30d a/a</th><th>SpA</th><th>Capital estándar</th><th>Concentración</th><th>Máx. z</th><th>ICE-RES</th></tr></thead><tbody id="regionMatrix"></tbody></table></div></article>
 </section>
 
 <section class="screen" id="fenomenos">
-  <div class="section-title"><div><div class="eyebrow">INTELIGENCIA SOCIETARIA</div><h2>Fenómenos observables</h2><p>Las señales se interpretan por <b>intensidad, persistencia, alcance y dirección</b>. Solo se incluyen fenómenos que pueden sostenerse con la información RES actualmente cargada.</p></div></div>
+  <div class="section-title"><div><div class="eyebrow">INTELIGENCIA SOCIETARIA</div><h2>Fenómenos observables</h2><p>Las señales se interpretan por <b>intensidad, persistencia, alcance y dirección</b>. Al abrir una señal podrás examinar sociedades concretas y sus fichas RES.</p></div><div class="micro-context"><b id="entitySampleCount">35</b><span>sociedades navegables en demo</span></div></div>
   <div class="kpi-grid" id="phenomenonKpis"></div>
-  <article class="card phenomenon-board"><div class="card-head"><div><h3>Qué merece atención ahora</h3><p>Prioridades generadas por convergencia de evidencia temporal y estructural disponible.</p></div></div><div class="phenomenon-grid" id="phenomenonBoard"></div></article>
+  <article class="card phenomenon-board"><div class="card-head"><div><h3>Qué merece atención ahora</h3><p>Prioridades generadas por convergencia de evidencia temporal y estructural disponible.</p></div><span class="tag">clic → fenómeno → sociedades → ficha</span></div><div class="phenomenon-grid" id="phenomenonBoard"></div></article>
   <div class="grid grid-2 phenomenon-mid"><article class="card"><div class="card-head"><div><h3>Matriz intensidad × persistencia</h3><p>Burbuja mayor = mayor alcance. Arriba/derecha = patrón más consolidado.</p></div></div><div class="phenomenon-scatter" id="phenomenonScatter"></div></article><article class="card"><div class="card-head"><div><h3>Ciclo de las señales</h3><p>Distingue señales emergentes, persistentes, estructurales, en enfriamiento o todavía débiles.</p></div></div><div class="lifecycle" id="lifecycleLanes"></div></article></div>
   <div class="grid grid-3"><article class="card"><div class="card-head"><div><h3>Aceleraciones comunales</h3><p>Últimos 30 días vs. 30 previos y mismo período 2025.</p></div></div><div class="table-wrap short"><table><thead><tr><th>Comuna</th><th>30d</th><th>Momentum</th><th>a/a</th><th>Estado</th></tr></thead><tbody id="accelTable"></tbody></table></div></article><article class="card"><div class="card-head"><div><h3>Recurrencia constitutiva</h3><p>Misma comuna + tipo + capital repetida en múltiples días.</p></div></div><div class="table-wrap short"><table><thead><tr><th>Patrón</th><th>Días</th><th>Sociedades</th><th>Máx/día</th></tr></thead><tbody id="recurrentTable"></tbody></table></div></article><article class="card"><div class="card-head"><div><h3>Vocabulario emergente</h3><p>Palabras de razones sociales con aumento reciente. No equivale a actividad económica validada.</p></div></div><div class="vocab-cloud" id="vocabList"></div></article></div>
-  <article class="card"><div class="card-head"><div><h3>Alcance metodológico cerrado</h3><p>Frontera funcional propuesta para su eventual incorporación a Atlas.</p></div><span class="tag">v4.0 · candidato final</span></div><div class="coverage-grid"><div class="coverage ok"><b>INCLUIDO</b><h3>Temporalidad</h3><span>Constitución, tendencias, aceleraciones, comparación interanual y desviación histórica.</span></div><div class="coverage ok"><b>INCLUIDO</b><h3>Territorio</h3><span>Región, comuna, concentración territorial y cambio reciente.</span></div><div class="coverage ok"><b>INCLUIDO</b><h3>Estructura observable</h3><span>Tipo societario, capital, recurrencias y estandarización de constitución.</span></div><div class="coverage ok"><b>INCLUIDO</b><h3>Razón social</h3><span>Patrones léxicos y vocabulario emergente como señal exploratoria.</span></div><div class="coverage"><b>FUERA DEL MÓDULO</b><h3>Personas y socios</h3><span>No se utilizan socios, accionistas, representantes, administradores ni relaciones persona–sociedad.</span></div><div class="coverage"><b>FUERA DEL MÓDULO</b><h3>Inferencias AML</h3><span>La sección describe dinámica societaria y atipicidad; no asigna sospecha ni riesgo LA/FT.</span></div></div></article>
-  <div class="notice"><b>Regla metodológica:</b> una señal “emergente” es un cambio reciente consistente con al menos otra referencia temporal o estructural observable dentro del RES. Ninguna señal implica irregularidad, relación entre sociedades ni riesgo LA/FT.</div>
+  <article class="card entity-explorer-card"><div class="card-head"><div><h3>Sociedades detrás de las señales</h3><p>Muestra real para evaluar el diseño de ficha. En Atlas, el mismo componente consultará el universo completo de <code>aml_res_company</code>.</p></div><div class="entity-filter-tabs" id="entityFilterTabs"><button class="active" data-cohort="all">Todas</button><button data-cohort="MACUL_SPA_5M">Macul</button><button data-cohort="HUECHURABA">Huechuraba</button><button data-cohort="ARICA">Arica</button><button data-cohort="VICTORIA">Victoria</button></div></div><div class="entity-list-grid" id="entityExplorer"></div></article>
+  <div class="notice"><b>Regla metodológica:</b> la ficha caracteriza sociedades con datos brutos y derivados de RES. No infiere actividad económica, vínculo entre sociedades, irregularidad ni riesgo LA/FT.</div>
 </section>
-<footer>Versión final candidata para Atlas v4.0 · exclusivamente RES · corte 31 julio 2026 · sin personas, socios ni relaciones persona–sociedad.</footer>
+<footer>Analizador RES · candidato Atlas v5.0 · exclusivamente información societaria observable · corte 31 julio 2026.</footer>
 </main>
 </div>
 <div class="tooltip" id="tooltip"></div>
 <aside class="drawer" id="drawer"><button class="btn drawer-close" id="drawerClose">Cerrar</button><div class="eyebrow" id="drawerEyebrow">DETALLE</div><h2 id="drawerTitle"></h2><p class="muted" id="drawerLead"></p><div id="drawerBody"></div></aside>
-<script src="data.js?v=4.0.0"></script>
-<script src="insights.js?v=4.0.0"></script>
-<script src="app.js?v=4.0.0"></script>
+<aside class="entity-drawer" id="entityDrawer"><button class="btn drawer-close" id="entityDrawerClose">Cerrar</button><div class="eyebrow">FICHA SOCIETARIA RES</div><div id="entityDrawerBody"></div></aside>
+<script src="data.js?v=5.0.0"></script>
+<script src="insights.js?v=5.0.0"></script>
+<script src="entities.js?v=5.0.0"></script>
+<script src="app.js?v=5.0.0"></script>
+<script src="entity-app.js?v=5.0.0"></script>
 </body>
 </html>

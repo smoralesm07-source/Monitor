@@ -49,17 +49,23 @@ jobs:
           test -s res-demo/app.js
           test -s res-demo/data.js
           test -s res-demo/insights.js
+          test -s res-demo/entities.js
+          test -s res-demo/entity-app.js
           test -s res-demo/style.css
+          test -s res-demo/entity.css
           test -s res-demo/atlas-contract.json
           test -s res-demo/ATLAS_INTEGRATION.md
 
           node --check res-demo/app.js
           node --check res-demo/data.js
           node --check res-demo/insights.js
+          node --check res-demo/entities.js
+          node --check res-demo/entity-app.js
           python3 -m json.tool res-demo/atlas-contract.json >/dev/null
           grep -q 'Fenómenos observables' res-demo/index.html
+          grep -q 'entitySearch' res-demo/index.html
+          grep -q 'entityDrawer' res-demo/index.html
           grep -q 'chileMap' res-demo/index.html
-          grep -q 'Candidato final para Atlas' res-demo/index.html
           ! grep -Eqi 'representante común|socio común|red societaria|beneficiario final' res-demo/app.js
 
           cp _state/datos.json datos.json
@@ -76,8 +82,11 @@ jobs:
           test -s public/res-demo/app.js
           test -s public/res-demo/data.js
           test -s public/res-demo/insights.js
+          test -s public/res-demo/entities.js
+          test -s public/res-demo/entity-app.js
+          test -s public/res-demo/entity.css
           test -s public/res-demo/atlas-contract.json
-          echo 'Demo RES final integrada al artefacto Pages.'
+          echo 'Demo RES v5 integrada al artefacto Pages.'
 
       - name: Subir artefacto de Pages
         uses: actions/upload-pages-artifact@v3
