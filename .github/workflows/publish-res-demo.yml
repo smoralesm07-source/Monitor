@@ -32,28 +32,38 @@ jobs:
         with:
           ref: main
 
-      - name: Recuperar último sitio generado
+      - name: Recuperar último estado del Monitor
         uses: actions/checkout@v6
         with:
           ref: monitor-state
           path: _state
 
-      - name: Integrar demo RES al artefacto publicado
+      - name: Reconstruir sitio e integrar demo RES
         shell: bash
         run: |
           set -euxo pipefail
-          test -s _state/public/index.html
+          test -s _state/datos.json
+          test -s index.html
+          test -s construye_sitio.py
           test -s res-demo/index.html
           test -s res-demo/app.js
           test -s res-demo/data.js
           test -s res-demo/style.css
-          rm -rf public
-          cp -a _state/public public
+
+          cp _state/datos.json datos.json
+          python3 construye_sitio.py
+          python3 generar_resumen.py --entrada datos.json --salida resumen.json
+
           rm -rf public/res-demo
           cp -a res-demo public/res-demo
           touch public/.nojekyll
+
+          test -s public/index.html
+          test -s public/datos.json
           test -s public/res-demo/index.html
-          echo 'Demo RES integrada al sitio Pages.'
+          test -s public/res-demo/app.js
+          test -s public/res-demo/data.js
+          echo 'Demo RES integrada al artefacto Pages.'
 
       - name: Subir artefacto de Pages
         uses: actions/upload-pages-artifact@v3
