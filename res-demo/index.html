@@ -3,52 +3,98 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Analizador RES · Demo v2</title>
-<link rel="stylesheet" href="style.css?v=2.0"/>
+<title>Analizador RES · Inteligencia societaria</title>
+<link rel="stylesheet" href="style.css?v=3.0.0"/>
 </head>
 <body>
 <div class="app-shell">
 <header class="topbar">
   <div class="topbar-main">
-    <div class="brand"><div class="brand-mark"><span></span></div><div><strong>ANALIZADOR RES</strong><small>Inteligencia societaria · demo autónoma</small></div></div>
-    <div class="status-group"><span class="status solo">SOLO RES</span><span id="healthBadge" class="status ok">Datos cargados</span><span class="status">Corte 31·07·2026</span><span class="status">1.609.372 sociedades</span></div>
+    <div class="brand"><div class="brand-mark"><span></span></div><div><strong>ANALIZADOR RES</strong><small>Dinámica societaria · demo autónoma</small></div></div>
+    <div class="status-group"><span class="status solo">SOLO RES</span><span class="status ok" id="healthBadge">Datos operativos</span><span class="status">Corte 31·07·2026</span><span class="status">1.609.372 sociedades</span></div>
   </div>
   <nav class="nav">
-    <button data-tab="pulso">Pulso RES</button>
-    <button data-tab="territorio">Territorio</button>
-    <button data-tab="fenomenos">Fenómenos</button>
-    <button data-tab="estructura">Estructura & red</button>
+    <button class="active" data-screen="pulso">Pulso</button>
+    <button data-screen="territorio">Territorio</button>
+    <button data-screen="fenomenos">Fenómenos emergentes</button>
+    <button data-screen="estructura">Cobertura &amp; red</button>
   </nav>
 </header>
 <main>
 <section class="intro-panel">
-  <div><div class="eyebrow">REGISTRO DE EMPRESAS Y SOCIEDADES</div><h1>Analítica societaria con señales explicables y trazables</h1><p>Producto independiente de Atlas. Esta demo trabaja exclusivamente con datos RES disponibles y clasifica <b>atipicidad societaria</b>; no asigna riesgo LA/FT.</p></div>
-  <div class="intro-side"><div><span class="dot green"></span><b>Base real</b><small>02·05·2013 → 31·07·2026</small></div><div><span class="dot amber"></span><b>Profundidad parcial</b><small>Sin representantes, socios ni domicilio exacto aún</small></div></div>
+  <div><div class="eyebrow">REGISTRO DE EMPRESAS Y SOCIEDADES</div><h1>Radar de cambio societario</h1><p>La demo deja de mostrar solo volumen y pasa a distinguir <b>expansión, aceleración, desviaciones estacionales, recurrencia estructural y señales emergentes</b>. Todo se calcula exclusivamente con RES: describe atipicidad y cambio, no riesgo LA/FT.</p></div>
+  <div class="intro-side"><div><span class="dot green"></span><b>Base real</b><small>Constituciones 2013 → julio 2026.</small></div><div><span class="dot amber"></span><b>Lectura por capas</b><small>Qué cambia · dónde · con qué persistencia · qué falta confirmar.</small></div></div>
 </section>
-<section id="pulso" class="screen">
-  <div class="section-title"><div><span class="eyebrow">PULSO RES</span><h2>Qué está pasando con la creación de sociedades</h2></div></div>
-  <div id="pulsoKpis" class="kpi-grid"></div>
-  <div class="grid grid-2 wide-left"><article class="card"><div class="card-head"><div><h3>Constituciones por año</h3><p>2026 corresponde a enero–julio.</p></div><span class="tag">2013–2026</span></div><div id="annualChart" class="chart"></div></article><article class="card"><div class="card-head"><div><h3>Mix societario 2026</h3><p>Participación y crecimiento YTD.</p></div></div><div id="typeChart"></div></article></div>
-  <div class="grid grid-2"><article class="card"><div class="card-head"><div><h3>Pulso semanal</h3><p>Mayo–julio 2026.</p></div></div><div id="weeklyChart" class="chart compact"></div></article><article class="card"><div class="card-head"><div><h3>Lectura ejecutiva</h3><p>Hallazgos descriptivos de la réplica actual.</p></div></div><div id="executiveRead" class="insight-stack"></div></article></div>
+
+<section class="screen active" id="pulso">
+  <div class="section-title"><div><div class="eyebrow">PANORAMA NACIONAL</div><h2>Pulso societario</h2><p>Primero contexto; después, cambio. 2026 es parcial y corresponde a enero–julio.</p></div></div>
+  <div class="kpi-grid" id="pulsoKpis"></div>
+  <div class="grid grid-2 wide-left">
+    <article class="card"><div class="card-head"><div><h3>Constituciones por año</h3><p>Serie estructural 2013–2026.</p></div><span class="tag">2026 parcial</span></div><div class="chart" id="annualChart"></div></article>
+    <article class="card"><div class="card-head"><div><h3>Mezcla societaria</h3><p>Participación y cambio interanual por tipo.</p></div></div><div id="typeChart"></div></article>
+  </div>
+  <div class="grid grid-2">
+    <article class="card"><div class="card-head"><div><h3>Pulso semanal</h3><p>13 semanas recientes disponibles.</p></div></div><div class="chart compact" id="weeklyChart"></div></article>
+    <article class="card"><div class="card-head"><div><h3>Lectura de ciclo</h3><p>Separación entre expansión acumulada y momentum reciente.</p></div></div><div class="insight-stack" id="cycleRead"></div></article>
+  </div>
 </section>
-<section id="territorio" class="screen">
-  <div class="section-title with-controls"><div><span class="eyebrow">TERRITORIO · ACTIVO</span><h2>Dónde se está acelerando la constitución de sociedades</h2><p>La vista abre en nivel nacional. Selecciona una región para profundizar en evolución mensual y comunas.</p></div><div class="control-cluster"><label>Región<select id="territoryRegion"></select></label><button id="territoryReset" class="btn">Nacional</button></div></div>
-  <div id="territoryKpis" class="kpi-grid"></div>
-  <div class="grid territory-grid"><article class="card map-card"><div class="card-head"><div><h3>Cartograma regional</h3><p>Color = volumen YTD 2026. Clic para seleccionar.</p></div><span class="tag">Ene–Jul</span></div><div id="territoryMap" class="map-wrap"></div></article><article class="card detail-card"><div class="card-head"><div><h3 id="territoryDetailTitle">Chile</h3><p id="territoryDetailSub">Comparación 2026 vs 2025</p></div><span id="territoryBadge" class="severity medium">Nacional</span></div><div id="territoryHeadline"></div><div id="territoryLine" class="chart compact"></div></article><article class="card commune-card"><div class="card-head"><div><h3>Principales comunas</h3><p id="communeSub">Selecciona una región para ver sus comunas.</p></div></div><div id="communeList" class="bar-list"></div></article></div>
-  <div class="grid grid-2"><article class="card"><div class="card-head"><div><h3>Ranking territorial</h3><p>Volumen, crecimiento y participación nacional.</p></div><div class="segmented"><button data-sort="volume" class="active">Volumen</button><button data-sort="growth">Crecimiento</button></div></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Región</th><th>2026</th><th>2025</th><th>Var.</th><th>Cuota</th><th>Capital mediano</th></tr></thead><tbody id="territoryTable"></tbody></table></div></article><article class="card"><div class="card-head"><div><h3>Territorios a revisar</h3><p>Priorización descriptiva por aceleración YTD y volumen.</p></div></div><div id="territoryWatch" class="watch-list"></div></article></div>
+
+<section class="screen" id="territorio">
+  <div class="section-title with-controls">
+    <div><div class="eyebrow">GEOGRAFÍA DEL CAMBIO</div><h2>Territorio</h2><p>El mapa responde a la métrica seleccionada. Un volumen alto no equivale a una aceleración alta.</p></div>
+    <div class="control-cluster"><label>Región<select id="regionSelect"></select></label></div>
+  </div>
+  <div class="kpi-grid" id="territoryKpis"></div>
+  <div class="grid territory-main">
+    <article class="card map-card">
+      <div class="card-head map-head"><div><h3>Chile · dinámica regional</h3><p>Mapa geográfico real de regiones continentales. Haz clic para profundizar.</p></div></div>
+      <div class="metric-tabs" id="mapMetricTabs">
+        <button class="active" data-metric="volume">Volumen</button><button data-metric="growth">Crecimiento YTD</button><button data-metric="momentum">Momentum 30d</button><button data-metric="change">Cambio estructural</button>
+      </div>
+      <div class="real-map" id="chileMap"><div class="map-loading">Cargando geometría regional…</div></div>
+      <div class="map-legend" id="mapLegend"></div>
+      <div class="map-source">Geometría continental: chile-map-geojson · OpenStreetMap/polygons.openstreetmap.fr.</div>
+    </article>
+    <div class="territory-side">
+      <article class="card"><div class="card-head"><div><h3 id="regionTitle">Chile</h3><p id="regionSub">Lectura nacional y focos territoriales.</p></div><span class="state-chip" id="regionState">Sistema</span></div><div id="regionNarrative"></div><div class="chart compact" id="regionLine"></div></article>
+      <article class="card"><div class="card-head"><div><h3>Comunas que están cambiando</h3><p>No es ranking de tamaño: prioriza aceleración reciente corroborada por comparación interanual.</p></div></div><div class="signal-list" id="communeEmerging"></div></article>
+    </div>
+  </div>
+  <article class="card"><div class="card-head"><div><h3>Matriz territorial</h3><p>Permite distinguir escala, crecimiento, momentum, composición, concentración y desviación histórica.</p></div><span class="tag">ICE-RES = prioridad de cambio, no riesgo</span></div><div class="table-wrap"><table><thead><tr><th>#</th><th>Región</th><th>2026 YTD</th><th>Δ YTD</th><th>Momentum 30d</th><th>Δ 30d a/a</th><th>SpA</th><th>Capital estándar</th><th>Concentración</th><th>Máx. z</th><th>ICE-RES</th></tr></thead><tbody id="regionMatrix"></tbody></table></div></article>
 </section>
-<section id="fenomenos" class="screen">
-  <div class="section-title with-controls"><div><span class="eyebrow">FENÓMENOS · ACTIVO</span><h2>Mesa de atipicidad societaria</h2><p>Integra aceleraciones regionales y clusters de constitución. Cada señal conserva su explicación y evidencia.</p></div><button id="phenomenaReset" class="btn">Restablecer filtros</button></div>
-  <div id="phenomenaKpis" class="kpi-grid"></div>
-  <div class="phenomena-controls card"><label>Región<select id="phenomenaRegion"></select></label><label>Z mínimo<div class="range-row"><input id="zRange" type="range" min="1.5" max="5" step=".25" value="3"><b id="zVal">3.00</b></div></label><label>Cluster mínimo<div class="range-row"><input id="clusterRange" type="range" min="10" max="30" step="1" value="15"><b id="clusterVal">15</b></div></label><label class="grow">Buscar<input id="clusterSearch" type="text" placeholder="Comuna, sociedad, región…"></label></div>
-  <div class="method-strip"><div><b>Aceleración territorial</b><span>mismo mes 2026 vs 2022–2025</span></div><div><b>Cluster constitutivo</b><span>fecha + comuna + tipo + capital</span></div><div><b>Prioridad exploratoria</b><span>ordena revisión; no califica ilícito</span></div></div>
-  <div class="grid grid-2"><article class="card"><div class="card-head"><div><h3>Radar de anomalías</h3><p>Desvíos regionales sobre su patrón histórico comparable.</p></div><span id="anomalyCount" class="tag"></span></div><div id="anomalyBars" class="bar-list mini"></div><div class="table-wrap short"><table><thead><tr><th>Señal</th><th>Actual</th><th>Base</th><th>Δ</th><th>Z</th><th>Nivel</th></tr></thead><tbody id="anomalyTable"></tbody></table></div></article><article class="card"><div class="card-head"><div><h3>Clusters recientes</h3><p>Mayo–julio 2026. Clic en una fila para inspeccionar.</p></div><div><button id="exportClusters" class="btn small">Exportar CSV</button></div></div><div class="table-wrap short"><table><thead><tr><th>Fecha</th><th>Territorio</th><th>Tipo</th><th>Capital</th><th>N</th><th>Prioridad</th></tr></thead><tbody id="clusterTable"></tbody></table></div></article></div>
-  <article class="card"><div class="card-head"><div><h3>Cola de revisión</h3><p>Señales combinadas ordenadas por prioridad exploratoria.</p></div><span class="tag">Explicable</span></div><div id="phenomenaQueue" class="queue-grid"></div></article>
-  <div class="notice"><b>Lectura metodológica.</b> Una señal alta significa “conviene revisar el patrón”, no “hay una irregularidad”. La base RES por sí sola no permite inferir riesgo LA/FT ni relación entre sociedades distintas.</div>
+
+<section class="screen" id="fenomenos">
+  <div class="section-title"><div><div class="eyebrow">INTELIGENCIA SOCIETARIA</div><h2>Fenómenos emergentes</h2><p>Una señal se interpreta por <b>intensidad, persistencia, alcance y dirección</b>. El panel diferencia lo emergente de lo estructural o ya enfriándose.</p></div></div>
+  <div class="kpi-grid" id="phenomenonKpis"></div>
+  <article class="card phenomenon-board"><div class="card-head"><div><h3>Qué merece atención ahora</h3><p>Lecturas generadas a partir de convergencia entre señales, no por un único umbral.</p></div></div><div class="phenomenon-grid" id="phenomenonBoard"></div></article>
+  <div class="grid grid-2 phenomenon-mid">
+    <article class="card"><div class="card-head"><div><h3>Matriz intensidad × persistencia</h3><p>Burbuja mayor = mayor alcance. Arriba/derecha = fenómeno más consolidado.</p></div></div><div class="phenomenon-scatter" id="phenomenonScatter"></div></article>
+    <article class="card"><div class="card-head"><div><h3>Ciclo de las señales</h3><p>La misma anomalía puede estar naciendo, persistiendo o disipándose.</p></div></div><div class="lifecycle" id="lifecycleLanes"></div></article>
+  </div>
+  <div class="grid grid-3">
+    <article class="card"><div class="card-head"><div><h3>Aceleraciones comunales</h3><p>Últimos 30 días vs. 30 previos y mismo período 2025.</p></div></div><div class="table-wrap short"><table><thead><tr><th>Comuna</th><th>30d</th><th>Momentum</th><th>a/a</th><th>Estado</th></tr></thead><tbody id="accelTable"></tbody></table></div></article>
+    <article class="card"><div class="card-head"><div><h3>Recurrencia constitutiva</h3><p>Misma comuna + tipo + capital repetida en múltiples días.</p></div></div><div class="table-wrap short"><table><thead><tr><th>Patrón</th><th>Días</th><th>Sociedades</th><th>Máx/día</th></tr></thead><tbody id="recurrentTable"></tbody></table></div></article>
+    <article class="card"><div class="card-head"><div><h3>Vocabulario emergente</h3><p>Palabras de razones sociales con aumento reciente. Señal exploratoria, no actividad económica validada.</p></div></div><div class="vocab-cloud" id="vocabList"></div></article>
+  </div>
+  <article class="card blindspots"><div class="card-head"><div><h3>Fenómenos que probablemente existen, pero RES actual aún no permite observar</h3><p>Esta sección impide confundir ausencia de señal con ausencia del fenómeno.</p></div></div><div class="blind-grid" id="blindSpots"></div></article>
+  <div class="notice"><b>Regla metodológica:</b> “emergente” significa cambio reciente consistente con otra evidencia temporal o estructural dentro del RES. Ninguna señal implica irregularidad, relación entre sociedades ni sospecha AML.</div>
 </section>
-<section id="estructura" class="screen"><div class="section-title"><div><span class="eyebrow">COBERTURA DE DATOS</span><h2>Qué podemos analizar hoy y qué falta materializar</h2></div></div><div class="coverage-grid"><div class="coverage ok"><b>Sociedades / RUT</b><span>1.609.372 entidades únicas</span></div><div class="coverage ok"><b>Territorio</b><span>Región y comuna social/tributaria</span></div><div class="coverage ok"><b>Capital</b><span>Disponible en la tabla base</span></div><div class="coverage wait"><b>Representantes / socios</b><span>Estructura preparada; 0 relaciones materializadas</span></div><div class="coverage wait"><b>Domicilio exacto</b><span>Falta calle, número y unidad</span></div><div class="coverage wait"><b>Actuaciones posteriores</b><span>Hoy solo constituciones materializadas</span></div></div><div class="grid grid-2"><article class="card"><div class="card-head"><div><h3>Capital mediano por tipo</h3><p>Enero–julio 2026.</p></div></div><div id="capitalType" class="bar-list"></div></article><article class="card locked"><div class="lock"><div class="lock-icon">⌁</div><h3>Red societaria en espera</h3><p>Se habilitará cuando RES_PERSON_RELATIONSHIP y domicilio exacto tengan datos reales.</p></div></article></div></section>
-<footer>Analizador RES demo v2.0 · independiente de Atlas · corte 31 de julio de 2026.</footer>
-</main></div>
-<div id="tooltip" class="tooltip"></div><aside id="drawer" class="drawer"><button id="drawerClose" class="btn drawer-close">Cerrar</button><div id="drawerKind" class="eyebrow"></div><h2 id="drawerTitle"></h2><p id="drawerMeta" class="muted"></p><div id="drawerBody"></div></aside>
-<script src="data.js?v=2.0"></script><script src="app.js?v=2.0"></script>
-</body></html>
+
+<section class="screen" id="estructura">
+  <div class="section-title"><div><div class="eyebrow">CAPACIDAD ANALÍTICA</div><h2>Cobertura y próxima frontera</h2><p>Qué podemos inferir hoy y qué requiere una capa adicional de datos RES.</p></div></div>
+  <div class="coverage-grid" id="coverageGrid"></div>
+  <div class="grid grid-2">
+    <article class="card"><div class="card-head"><div><h3>Capital por tipo societario</h3><p>Mediana enero–julio 2026.</p></div></div><div id="capitalType"></div></article>
+    <article class="card locked"><div class="lock"><div class="lock-icon">⌁</div><h3>Red societaria</h3><p>Se activará con rigor cuando existan representantes, administradores, socios/accionistas y domicilio exacto. Esa capa permitiría pasar de coincidencias estadísticas a relaciones observables.</p></div></article>
+  </div>
+</section>
+<footer>Demo autónoma v3 · exclusivamente RES · corte 31 julio 2026 · analítica descriptiva y exploratoria. ICE-RES es un índice de cambio estructural para priorización analítica, no un score de riesgo.</footer>
+</main>
+</div>
+<div class="tooltip" id="tooltip"></div>
+<aside class="drawer" id="drawer"><button class="btn drawer-close" id="drawerClose">Cerrar</button><div class="eyebrow" id="drawerEyebrow">DETALLE</div><h2 id="drawerTitle"></h2><p class="muted" id="drawerLead"></p><div id="drawerBody"></div></aside>
+<script src="data.js?v=3.0.0"></script>
+<script src="insights.js?v=3.0.0"></script>
+<script src="app.js?v=3.0.0"></script>
+</body>
+</html>
