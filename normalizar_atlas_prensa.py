@@ -5,6 +5,8 @@
 Backfill defensivo posterior al exportador principal:
 - acepta URL en link/url/canonical_url/enlace;
 - propaga fenómenos desde la publicación a sus menciones;
+- conserva términos de entidades detectadas por artículo para que ATLAS pueda
+  recuperar una noticia aunque la entidad no haya sido promovida al índice;
 - no altera resolución de identidad ni scoring.
 """
 from __future__ import annotations
@@ -35,6 +37,25 @@ def uniq(vals):
     return out
 
 
+def entity_terms(pub):
+    """Extrae nombres/variantes sin exigir que ya tengan naturaleza resuelta."""
+    vals=[]
+    for key in ('nomina_entidades','entidades_detectadas','entidades'):
+        for row in pub.get(key) or []:
+            if isinstance(row,dict):
+                name=first(row,'nombre','name','texto','text')
+                if name:
+                    vals.append(name)
+                for alias_key in ('variantes','aliases','alias'):
+                    aliases=row.get(alias_key) or []
+                    if isinstance(aliases,str):
+                        aliases=[aliases]
+                    vals.extend(aliases)
+            elif isinstance(row,str):
+                vals.append(row)
+    return uniq(vals)[:80]
+
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--indice',type=Path,default=Path('atlas_prensa.json'))
@@ -48,7 +69,7 @@ def main():
     by_url={str(first(p,'link','url','canonical_url','enlace')).rstrip('/'):p for p in pubs if first(p,'link','url','canonical_url','enlace')}
 
     article_by_id={str(a.get('id')):a for a in (idx.get('articles') or []) if isinstance(a,dict)}
-    fixed_urls=0; fixed_ph=0
+    fixed_urls=0; fixed_ph=0; fixed_terms=0
     for a in article_by_id.values():
         p=by_title.get(norm(a.get('title')))
         if not p and a.get('url'):
@@ -61,6 +82,9 @@ def main():
         ph=uniq((a.get('phenomena') or []) + (p.get('fenomenos') or []) + (p.get('fenomenos_detectados') or []) + (p.get('phenomena') or []))[:12]
         if ph != (a.get('phenomena') or []):
             a['phenomena']=ph; fixed_ph+=1
+        terms=uniq((a.get('search_terms') or []) + entity_terms(p))[:80]
+        if terms != (a.get('search_terms') or []):
+            a['search_terms']=terms; fixed_terms+=1
 
     propagated=0
     for m in idx.get('mentions') or []:
@@ -71,9 +95,9 @@ def main():
         if ph != (m.get('phenomena') or []):
             m['phenomena']=ph; propagated+=1
 
-    idx.setdefault('semantics',{})['traceability']='URL original y fenómenos se conservan para corroboración; asociación temática no acredita participación de la entidad.'
+    idx.setdefault('semantics',{})['traceability']='URL original, fenómenos y términos de entidades por noticia se conservan para corroboración; asociación temática o textual no acredita identidad ni participación.'
     args.indice.write_text(json.dumps(idx,ensure_ascii=False,separators=(',',':'))+'\n',encoding='utf-8')
-    print(f'Normalización Atlas-Prensa: urls_backfill={fixed_urls} articulos_fenomenos={fixed_ph} menciones_fenomenos={propagated}')
+    print(f'Normalización Atlas-Prensa: urls_backfill={fixed_urls} articulos_fenomenos={fixed_ph} articulos_terminos={fixed_terms} menciones_fenomenos={propagated}')
     return 0
 
 if __name__=='__main__':
