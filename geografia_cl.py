@@ -311,3 +311,76 @@ def evalua_geografia(nombre: str, contexto_izq: str = "") -> dict[str, object]:
 
     return {"es_lugar": True, "fuerza": "catalogo", "senales": senales,
             "info": info}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Barrido por catálogo
+#
+# El reconocimiento de entidades sólo propone topónimos cuando el modelo
+# estadístico está cargado. Para geoetiquetar una noticia hace falta recorrer el
+# texto contra la lista cerrada de 346 comunas: es un catálogo acotado y
+# verificable, no una inferencia. El arbitraje por contexto sigue siendo el de
+# `evalua_geografia`, así que "doña María Elena" continúa siendo una persona.
+
+def _plano_alineado(texto: str) -> str:
+    """Versión sin tildes y en minúscula que conserva las posiciones del original."""
+    salida = []
+    for ch in texto:
+        base = "".join(
+            c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c)
+        )
+        salida.append((base[:1] if base else ch).lower())
+    return "".join(salida)
+
+
+_COMUNAS_ALTERNANCIA = "|".join(
+    re.escape(clave).replace(r"\ ", r"\s+")
+    for clave in sorted({_norm(c) for c in COMUNAS if _norm(c)}, key=len, reverse=True)
+)
+COMUNAS_RE = re.compile(rf"(?<![a-z0-9])(?:{_COMUNAS_ALTERNANCIA})(?![a-z0-9])")
+
+VENTANA_IZQUIERDA = 60
+
+
+def detecta_comunas(
+    texto: str, excluir: "list[tuple[int, int]] | None" = None,
+) -> list[dict[str, object]]:
+    """Encuentra comunas nombradas en el texto y las arbitra por contexto.
+
+    ``excluir`` recibe los tramos ya ocupados por entidades que no son lugares,
+    para que "Inversiones San Ramón SpA" no aporte la comuna San Ramón.
+
+    Devuelve una lista de ``{canonico, region, inicio, fin, fuerza, senales}``
+    con la aparición más fuerte de cada comuna.
+    """
+    if not texto:
+        return []
+    plano = _plano_alineado(texto)
+    vetados = list(excluir or [])
+    mejores: dict[str, dict[str, object]] = {}
+
+    for m in COMUNAS_RE.finditer(plano):
+        inicio, fin = m.start(), m.end()
+        if any(inicio < b and fin > a for a, b in vetados):
+            continue
+        clave = " ".join(m.group(0).split())
+        canonico = FORMA_CANONICA.get(clave)
+        if not canonico or NIVEL_TOPONIMO.get(clave) != "COMUNA":
+            continue
+        veredicto = evalua_geografia(canonico, texto[max(0, inicio - VENTANA_IZQUIERDA):inicio])
+        if not veredicto["es_lugar"]:
+            continue
+        item = {
+            "canonico": canonico,
+            "region": COMUNA_DE_REGION.get(clave),
+            "inicio": inicio,
+            "fin": fin,
+            "fuerza": str(veredicto["fuerza"]),
+            "senales": [str(x) for x in veredicto["senales"]],
+        }
+        previo = mejores.get(clave)
+        # Una comuna nombrada dos veces se queda con su aparición más fuerte:
+        # basta una marca explícita para que el lugar deje de ser incidental.
+        if previo is None or (previo["fuerza"] != "definitiva" and item["fuerza"] == "definitiva"):
+            mejores[clave] = item
+    return sorted(mejores.values(), key=lambda x: int(x["inicio"]))

@@ -38,6 +38,14 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, Iterable
 
+try:  # Catálogo geográfico de Chile (comunas, provincias, regiones).
+    import geografia_cl as GEO
+
+    GEOGRAFIA_DISPONIBLE = True
+except Exception:  # pragma: no cover - degradación controlada
+    GEO = None
+    GEOGRAFIA_DISPONIBLE = False
+
 try:
     import reconocedor_entidades as REC
 
@@ -1119,6 +1127,12 @@ def procesa_publicacion(
             cand["score"] = veredicto["score"]
             cand["senales"] = veredicto["senales"]
             cand["motivo"] = veredicto["motivo"]
+            # El reconocedor ya resolvió si la cadena es un topónimo y de qué
+            # nivel administrativo. Esa decisión se perdía aquí, y sin ella la
+            # noticia no puede decir de qué comuna habla.
+            for campo in ("nombre_geografico", "nivel_geografico", "region"):
+                if veredicto.get(campo):
+                    cand[campo] = veredicto[campo]
         candidatos.append(cand)
 
     candidatos.extend(extrae_reglas(texto, bool(config.get("incluir_rut", True))))
@@ -1206,7 +1220,14 @@ def procesa_publicacion(
             "senales": set(),
             "ruts": [],
             "geo": geo,
+            "geo_dpa": None,
         })
+        if cand.get("nivel_geografico") and not item.get("geo_dpa"):
+            item["geo_dpa"] = {
+                "nivel": str(cand["nivel_geografico"]),
+                "canonico": str(cand.get("nombre_geografico") or canonico),
+                "region": cand.get("region"),
+            }
         # El score de la entidad es el máximo observado entre sus menciones:
         # basta una aparición inequívoca para consolidar la identificación.
         item["confianza_score"] = max(
@@ -1385,14 +1406,17 @@ def ubicaciones_publicacion(
         if e.get("tipo") != "LUGAR":
             continue
         geo = e.get("geo") or aliases.get(normaliza(e.get("nombre_canonico", "")), {}).get("geo")
+        # La división político-administrativa la resuelve el catálogo geográfico
+        # del reconocedor; el alias sólo aporta coordenadas cuando las tiene.
+        dpa = e.get("geo_dpa") or {}
         item = {
             "id": id_estable("LOC", e.get("nombre_canonico")),
             "nombre": e.get("nombre_canonico"),
             "lat": geo.get("lat") if geo else None,
             "lon": geo.get("lon") if geo else None,
-            "region": geo.get("region") if geo else None,
+            "region": dpa.get("region") or (geo.get("region") if geo else None),
             "pais": geo.get("pais") if geo else "Chile",
-            "nivel": geo.get("nivel") if geo else "mencion",
+            "nivel": (dpa.get("nivel") or "").lower() or (geo.get("nivel") if geo else "mencion"),
             "origen": "texto",
             "confianza": e.get("confianza", "media"),
         }
@@ -1419,6 +1443,157 @@ def ubicaciones_publicacion(
             }
             ubicaciones[item["id"]] = item
     return list(ubicaciones.values())
+
+
+# Fuerza con que el texto marca un topónimo. "La comuna de X" y "el alcalde de
+# X" nombran la unidad administrativa; "en X" sólo sitúa y lo obtiene cualquier
+# lugar de paso; la coincidencia de catálogo a secas es la señal más débil.
+PESO_SENAL_GEO = {
+    "encabezado_geografico_previo": 100,
+    "cargo_territorial_previo": 100,
+    "preposicion_de_lugar_previa": 40,
+}
+# Dónde aparece el topónimo. El titular y la bajada describen de qué trata la
+# noticia; el cuerpo puede nombrar lugares de paso.
+PESO_CAMPO_GEO = {"titulo": 20, "resumen": 10, "contexto_uaf": 6, "evidencia_uaf": 6}
+TIPOS_NO_LUGAR = {"PERSONA", "EMPRESA", "ORGANIZACION", "ORGANISMO_PUBLICO",
+                  "INSTITUCION_FINANCIERA", "TRIBUNAL"}
+
+
+def _fuerza_geo(senales: "set[str]") -> tuple[int, str]:
+    peso = max((PESO_SENAL_GEO.get(x, 0) for x in senales), default=0)
+    if peso >= 100:
+        return peso, "contexto_explicito"
+    if peso > 0:
+        return peso, "preposicion_de_lugar"
+    return 0, "toponimo_catalogo"
+
+
+def resuelve_geografia(
+    entidades: list[dict[str, Any]],
+    texto: str = "",
+    segmentos: list[dict[str, Any]] | None = None,
+    menciones: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Decide de qué comuna habla una noticia, o declara que no puede decidirlo.
+
+    Una noticia nombra lugares por muchas razones y no todas la sitúan. Se
+    prefiere la comuna que el texto marca como unidad administrativa ("la
+    comuna de X", "el alcalde de X") por sobre la que sólo aparece tras una
+    preposición de lugar, y ésta por sobre la mera coincidencia de catálogo.
+    Si dos comunas quedan empatadas la noticia se publica SIN comuna resuelta y
+    con la lista completa: afirmar una sola sería inventar el foco de la
+    noticia.
+
+    La comuna sitúa la MENCIÓN; no imputa el hecho al territorio.
+    """
+    segmentos = segmentos or []
+    acumulado: dict[str, dict[str, Any]] = {}
+
+    def registra(nombre: str, region: Any, senales: set[str], campo: str, menciones_n: int):
+        clave = normaliza(nombre)
+        if not clave:
+            return
+        peso, fuerza = _fuerza_geo(senales)
+        item = acumulado.setdefault(clave, {
+            "nombre": nombre, "region": region, "fuerza": fuerza,
+            "menciones": 0, "campos": set(), "peso_senal": peso,
+        })
+        if peso > int(item["peso_senal"]):
+            item["peso_senal"], item["fuerza"] = peso, fuerza
+        if region and not item.get("region"):
+            item["region"] = region
+        item["menciones"] += max(1, menciones_n)
+        if campo:
+            item["campos"].add(campo)
+
+    # 1) Lo que el reconocedor ya resolvió sobre las entidades detectadas.
+    regiones: list[dict[str, Any]] = []
+    for e in entidades:
+        dpa = e.get("geo_dpa") or {}
+        if not dpa and GEOGRAFIA_DISPONIBLE and e.get("tipo") == "LUGAR":
+            info = GEO.info_toponimo(str(e.get("nombre_canonico") or ""))
+            if info:
+                dpa = {"nivel": info.get("nivel"), "canonico": info.get("canonico"),
+                       "region": info.get("region")}
+        nivel = str(dpa.get("nivel") or "")
+        if nivel not in {"COMUNA", "REGION"}:
+            continue
+        senales = {str(x) for x in (e.get("senales") or [])}
+        campos = [str(c) for c in (e.get("campos") or [])]
+        campo = max(campos, key=lambda c: PESO_CAMPO_GEO.get(c, 0), default="")
+        nombre = str(dpa.get("canonico") or e.get("nombre_canonico") or "")
+        if nivel == "COMUNA":
+            registra(nombre, dpa.get("region"), senales, campo, int(e.get("menciones", 0) or 0))
+        else:
+            peso, fuerza = _fuerza_geo(senales)
+            regiones.append({"nombre": nombre, "fuerza": fuerza, "peso": peso})
+
+    # 2) Barrido por catálogo: la lista de comunas es cerrada y verificable, y
+    #    no depende de que el modelo estadístico esté cargado.
+    if GEOGRAFIA_DISPONIBLE and texto:
+        # Las menciones no llevan tipo: se resuelve por el id de su entidad.
+        ids_no_lugar = {
+            str(e.get("id")) for e in entidades
+            if str(e.get("tipo") or "") in TIPOS_NO_LUGAR
+        }
+        vetados = [
+            (int(m.get("inicio", 0)), int(m.get("fin", 0)))
+            for m in (menciones or [])
+            if str(m.get("entidad_id") or "") in ids_no_lugar
+        ]
+        for hit in GEO.detecta_comunas(texto, vetados):
+            registra(
+                str(hit["canonico"]), hit.get("region"),
+                {str(x) for x in (hit.get("senales") or [])},
+                campo_por_posicion(segmentos, int(hit["inicio"])), 1,
+            )
+
+    candidatas = []
+    for item in acumulado.values():
+        campos = sorted(item["campos"])
+        candidatas.append({
+            "nombre": item["nombre"],
+            "region": item["region"],
+            "fuerza": item["fuerza"],
+            "menciones": int(item["menciones"]),
+            "campos": campos,
+            "puntaje": int(item["peso_senal"])
+                       + max((PESO_CAMPO_GEO.get(c, 0) for c in campos), default=0)
+                       + int(item["menciones"]),
+        })
+    candidatas.sort(key=lambda x: (-x["puntaje"], str(x["nombre"]).casefold()))
+    regiones.sort(key=lambda x: (-x["peso"], str(x["nombre"]).casefold()))
+
+    comuna = region = confianza = None
+    motivo = "sin_comuna_detectada"
+
+    if candidatas:
+        mejor = candidatas[0]
+        empatadas = [c for c in candidatas if c["puntaje"] == mejor["puntaje"]]
+        if len(empatadas) > 1:
+            motivo = "multiples_comunas_empatadas"
+        else:
+            comuna = mejor["nombre"]
+            region = mejor.get("region")
+            motivo = mejor["fuerza"]
+            confianza = "alta" if mejor["fuerza"] == "contexto_explicito" else "media"
+
+    if not region and regiones:
+        region = regiones[0]["nombre"]
+        if not comuna:
+            motivo = "solo_region"
+            confianza = "media"
+
+    return {
+        "comuna": comuna,
+        "region": region,
+        "comunas_detectadas": [
+            {k: v for k, v in c.items() if k != "puntaje"} for c in candidatas[:8]
+        ],
+        "geo_confianza": confianza,
+        "geo_motivo": motivo,
+    }
 
 
 def tokens_titulo(titulo: str) -> set[str]:
@@ -1963,6 +2138,14 @@ def enriquecer(
             pub["entidades"] = entidades
             pub["relaciones_entidades"] = []
             pub["ubicaciones_detectadas"] = ubicaciones
+            # El puente hacia ATLAS ya declaraba region/comuna por noticia y
+            # nadie las poblaba. Aquí se resuelven, o se dice que no se pudo.
+            geografia = resuelve_geografia(entidades, texto, segmentos, menciones)
+            pub["comuna"] = geografia["comuna"]
+            pub["region"] = geografia["region"]
+            pub["comunas_detectadas"] = geografia["comunas_detectadas"]
+            pub["geo_confianza"] = geografia["geo_confianza"]
+            pub["geo_motivo"] = geografia["geo_motivo"]
             pub["analisis_entidades_version"] = VERSION_MODULO
 
             for e in entidades:

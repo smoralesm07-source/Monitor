@@ -111,6 +111,23 @@ def build_current(datos: dict[str, Any]) -> tuple[dict[str, dict], dict[str, dic
             "phenomena": list(pub.get("fenomenos") or pub.get("fenomenos_detectados") or [])[:12],
             "region": pub.get("region"),
             "commune": pub.get("comuna"),
+            # La comuna sitúa la MENCIÓN, no imputa el hecho al territorio. Se
+            # publica junto a su fuerza y a las demás comunas nombradas, para
+            # que el consumidor distinga "la noticia es de Renca" de "la
+            # noticia nombra Renca de paso".
+            "commune_confidence": pub.get("geo_confianza"),
+            "commune_basis": pub.get("geo_motivo"),
+            "communes": [
+                {
+                    "name": str(c.get("nombre") or "")[:120],
+                    "region": c.get("region"),
+                    "basis": c.get("fuerza"),
+                    "mentions": int(c.get("menciones") or 0),
+                    "fields": list(c.get("campos") or [])[:6],
+                }
+                for c in (pub.get("comunas_detectadas") or [])[:8]
+                if isinstance(c, dict)
+            ],
         }
 
         nomina = pub.get("nomina_entidades") or []
@@ -268,6 +285,15 @@ def merge(datos: dict[str, Any], previous: dict[str, Any], retention_days: int) 
         "semantics": {
             "identity": "PRESS_ONLY hasta resolución gobernada en ATLAS",
             "warning": "Una mención en prensa es contexto/evidencia abierta; no acredita delito ni identidad canónica por sí sola.",
+            "geography": (
+                "commune/region sitúan dónde ocurre lo que la noticia narra, "
+                "resuelto desde el catálogo DPA con el contexto de la mención. "
+                "commune_confidence 'alta' significa que el texto marcó el lugar "
+                "explícitamente ('la comuna de X', 'el alcalde de X'); 'media' es "
+                "coincidencia de catálogo. Cuando dos comunas empatan no se "
+                "resuelve ninguna y sólo viaja la lista en 'communes'. "
+                "Situar una mención no atribuye conducta al territorio."
+            ),
         },
         "stats": {"articles": len(article_rows), "entities": len(entity_rows), "mentions": len(mention_rows)},
         "articles": article_rows,

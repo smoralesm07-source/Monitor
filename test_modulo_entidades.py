@@ -207,6 +207,98 @@ class AnalisisRelacionalTests(unittest.TestCase):
         )
         self.assertGreater(salida["modulo_entidades"]["entidades_unicas"], 0)
 
+    def datos_geograficos(self):
+        return {
+            "version_motor": "prueba",
+            "prensa": [
+                {
+                    "id": "g1",
+                    "titulo": "Operativo en el norte",
+                    "resumen": (
+                        "El alcalde de San Ramón informó del operativo. "
+                        "La PDI actuó en la comuna de Renca."
+                    ),
+                    "texto_enriquecido": (
+                        "Los hechos ocurrieron en Villa Alemana y en Los Ángeles. "
+                        "Doña María Elena Fuentes Lagos declaró como testigo."
+                    ),
+                    "medio": "Medio de prueba",
+                    "fecha": "2026-08-05",
+                    "link": "https://example.cl/g1",
+                    "uaf": True,
+                },
+                {
+                    "id": "g2",
+                    "titulo": "Sin lugar identificable",
+                    "resumen": "La Fiscalía informó de una investigación en curso.",
+                    "texto_enriquecido": "No se menciona ningún territorio.",
+                    "medio": "Medio de prueba",
+                    "fecha": "2026-08-05",
+                    "link": "https://example.cl/g2",
+                    "uaf": True,
+                },
+            ],
+        }
+
+    def test_geoetiqueta_la_noticia_con_la_comuna_marcada_por_contexto(self):
+        salida = E.enriquecer(
+            self.datos_geograficos(), self.nlp, self.config, self.modelo, self.estadistico
+        )
+        pub = salida["prensa"][0]
+        # Dos comunas llegan por contexto explícito y empatan: afirmar una sola
+        # sería inventar el foco de la noticia.
+        nombres = {c["nombre"] for c in pub["comunas_detectadas"]}
+        self.assertIn("San Ramón", nombres)
+        self.assertIn("Renca", nombres)
+        if pub["comuna"] is None:
+            self.assertEqual(pub["geo_motivo"], "multiples_comunas_empatadas")
+        else:
+            self.assertIn(pub["comuna"], {"San Ramón", "Renca"})
+            self.assertEqual(pub["geo_confianza"], "alta")
+        # Un topónimo con forma de nombre propio no puede volverse persona.
+        personas = {
+            x["nombre"] for x in pub.get("nomina_entidades", [])
+            if x.get("naturaleza") == "PERSONA_NATURAL"
+        }
+        self.assertNotIn("San Ramón", personas)
+        self.assertNotIn("Renca", personas)
+
+    def test_sin_territorio_no_inventa_comuna(self):
+        salida = E.enriquecer(
+            self.datos_geograficos(), self.nlp, self.config, self.modelo, self.estadistico
+        )
+        pub = salida["prensa"][1]
+        self.assertIsNone(pub["comuna"])
+        self.assertIsNone(pub["geo_confianza"])
+        self.assertEqual(pub["geo_motivo"], "sin_comuna_detectada")
+        self.assertEqual(pub["comunas_detectadas"], [])
+
+    def test_la_comuna_arrastra_su_region(self):
+        salida = E.enriquecer(
+            self.datos_geograficos(), self.nlp, self.config, self.modelo, self.estadistico
+        )
+        pub = salida["prensa"][0]
+        if pub["comuna"] in {"San Ramón", "Renca"}:
+            self.assertEqual(pub["region"], "Metropolitana")
+
+    def test_comuna_dentro_de_una_razon_social_no_geoetiqueta(self):
+        datos = {
+            "version_motor": "prueba",
+            "prensa": [{
+                "id": "v1",
+                "titulo": "Fiscalía indaga a Inversiones San Ramón SpA",
+                "resumen": "La empresa Inversiones San Ramón SpA es investigada.",
+                "texto_enriquecido": "El caso lo lleva la Fiscalía.",
+                "medio": "Medio de prueba", "fecha": "2026-08-05",
+                "link": "https://example.cl/v1", "uaf": True,
+            }],
+        }
+        pub = E.enriquecer(
+            datos, self.nlp, self.config, self.modelo, self.estadistico
+        )["prensa"][0]
+        self.assertIsNone(pub["comuna"])
+        self.assertEqual(pub["comunas_detectadas"], [])
+
     def test_escritura_atomica(self):
         with tempfile.TemporaryDirectory() as tmp:
             ruta = Path(tmp) / "datos.json"
