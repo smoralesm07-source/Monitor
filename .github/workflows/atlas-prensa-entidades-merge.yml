@@ -1,0 +1,103 @@
+name: Integrar Radar Entidades en Atlas Prensa
+
+on:
+  workflow_run:
+    workflows: ["Exportar entidades de prensa para Atlas", "Radar Prensa Entidades"]
+    types: [completed]
+  schedule:
+    - cron: '27 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atlas-press-radar-merge
+  cancel-in-progress: true
+
+jobs:
+  fusionar:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Descargar código de integración
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Recuperar estados sin tocar Monitor UAF
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin atlas-press-state:refs/remotes/origin/atlas-press-state
+          git fetch origin radar-prensa-entidades-state:refs/remotes/origin/radar-prensa-entidades-state
+          git show origin/atlas-press-state:atlas_prensa.json > atlas_prensa.json
+          git show origin/radar-prensa-entidades-state:radar_prensa_entidades.json > radar_prensa_entidades.json
+          test -s atlas_prensa.json
+          test -s radar_prensa_entidades.json
+
+      - name: Fusionar sólo para consumo de Atlas
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile fusionar_radar_entidades_atlas.py
+          python3 -u fusionar_radar_entidades_atlas.py \
+            --atlas atlas_prensa.json \
+            --radar radar_prensa_entidades.json | tee fusion_radar_entidades.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('atlas_prensa.json').read_text(encoding='utf-8'))
+          assert d.get('version') == '1.0.0-atlas-press-bridge'
+          assert isinstance(d.get('entities'), list)
+          assert isinstance(d.get('mentions'), list)
+          assert isinstance(d.get('articles'), list)
+          assert d.get('stats',{}).get('entity_radar_articles_available',0) > 0
+          print('Artículos fusionados:', len(d['articles']))
+          print('Radar disponible:', d['stats']['entity_radar_articles_available'])
+          print('Agregados en esta fusión:', d['stats']['entity_radar_articles_added_last_merge'])
+          PY
+
+      - name: Publicar estado combinado de Atlas
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/atlas-press-combined
+          cp atlas_prensa.json /tmp/atlas-press-combined/
+          cat > /tmp/atlas-press-combined/README.md <<'EOF'
+          # ATLAS · Radar Prensa bridge combinado
+
+          Este estado conserva íntegro el bridge histórico y agrega artículos candidatos
+          del Radar Prensa Entidades exclusivamente para ampliar Entidad 360.
+
+          El Monitor UAF no es modificado por este proceso. Una coincidencia textual no
+          acredita identidad, participación ni responsabilidad y debe corroborarse.
+          EOF
+          git checkout --orphan atlas-press-combined-tmp
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/atlas-press-combined/atlas_prensa.json ./
+          cp /tmp/atlas-press-combined/README.md ./
+          git add atlas_prensa.json README.md
+          git config user.name "atlas-press-entity-merge[bot]"
+          git config user.email "atlas-press-entity-merge@users.noreply.github.com"
+          git commit -m "Integrar Radar Prensa Entidades"
+          git push origin HEAD:atlas-press-state --force
+
+      - name: Adjuntar diagnóstico si falla
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-atlas-radar-entidades
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            fusion_radar_entidades.log
+            atlas_prensa.json
+            radar_prensa_entidades.json
