@@ -1,0 +1,104 @@
+name: Radar Prensa Entidades
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'radar_prensa_entidades.py'
+      - '.github/workflows/radar-prensa-entidades.yml'
+  schedule:
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: radar-prensa-entidades
+  cancel-in-progress: true
+
+jobs:
+  construir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Descargar código del radar independiente
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Recuperar estado previo aislado
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git fetch origin radar-prensa-entidades-state:refs/remotes/origin/radar-prensa-entidades-state 2>/dev/null; then
+            git show origin/radar-prensa-entidades-state:radar_prensa_entidades.json > radar_prensa_entidades_previo.json || true
+          else
+            echo "Primera ejecución de Radar Prensa Entidades."
+          fi
+
+      - name: Ejecutar radar sin tocar Monitor UAF
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile radar_prensa_entidades.py
+          ARGS=(--salida radar_prensa_entidades.json --retencion-dias 730)
+          if [[ -f radar_prensa_entidades_previo.json ]]; then
+            ARGS+=(--estado-previo radar_prensa_entidades_previo.json)
+          fi
+          python3 -u radar_prensa_entidades.py "${ARGS[@]}" | tee radar_prensa_entidades.log
+          test -s radar_prensa_entidades.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('radar_prensa_entidades.json')
+          d=json.loads(p.read_text(encoding='utf-8'))
+          assert d.get('version') == '1.0.0-radar-prensa-entidades'
+          assert isinstance(d.get('articles'), list)
+          assert d.get('stats',{}).get('queries_ok',0) > 0
+          print('Tamaño:', p.stat().st_size, 'bytes')
+          print('Estadísticas:', d.get('stats'))
+          PY
+
+      - name: Publicar sólo el estado de Radar Prensa Entidades
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/radar-entidades
+          cp radar_prensa_entidades.json /tmp/radar-entidades/
+          cat > /tmp/radar-entidades/README.md <<'EOF'
+          # ATLAS · Radar Prensa Entidades
+
+          Estado generado por un proceso independiente del Monitor UAF.
+          Contiene artículos candidatos de prensa abierta para apoyar Entidad 360.
+
+          Esta rama no modifica monitor-state, atlas-press-state, datos.json,
+          el dashboard del Monitor UAF ni sus correos/alertas.
+          Una coincidencia textual no acredita identidad, participación ni responsabilidad.
+          EOF
+          git checkout --orphan radar-prensa-entidades-state-tmp
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/radar-entidades/radar_prensa_entidades.json ./
+          cp /tmp/radar-entidades/README.md ./
+          git add radar_prensa_entidades.json README.md
+          git config user.name "atlas-entity-press-radar[bot]"
+          git config user.email "atlas-entity-press-radar@users.noreply.github.com"
+          git commit -m "Actualizar Radar Prensa Entidades"
+          git push origin HEAD:radar-prensa-entidades-state --force
+
+      - name: Adjuntar diagnóstico si falla
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-radar-prensa-entidades
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            radar_prensa_entidades.log
+            radar_prensa_entidades.json
