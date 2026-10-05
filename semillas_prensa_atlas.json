@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "purpose": "Semillas editoriales verificadas para recuperar omisiones puntuales del radar histórico de ATLAS. No modifica el Monitor UAF operativo.",
+  "articles": [
+    {
+      "id": "ATLAS-SEED-PIETRA-GOLD-BBCL-20260227",
+      "date": "2026-02-27",
+      "title": "La barra que no cuadró: Aduanas revisa exportación de oro por $877 millones",
+      "media": "BioBioChile",
+      "url": "https://www.biobiochile.cl/especial/bbcl-investiga/noticias/articulos/2026/02/27/la-barra-que-no-cuadro-aduanas-revisa-exportacion-de-oro-por-877-millones.shtml",
+      "summary": "La investigación periodística describe una exportación de oro bajo revisión aduanera y señala que la factura proforma de la operación fue emitida por Pietra Gold SpA.",
+      "search_terms": ["Pietra Gold SpA"],
+      "source_domain": "biobiochile.cl",
+      "discovery": "ATLAS_VERIFIED_SEED",
+      "query_kind": "VERIFIED_ENTITY_MISS",
+      "backfill": true,
+      "verified_entity": {
+        "name": "Pietra Gold SpA",
+        "rut": "76.845.186-9"
+      }
+    }
+  ]
+}
