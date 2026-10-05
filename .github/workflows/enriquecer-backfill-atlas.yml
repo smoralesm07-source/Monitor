@@ -1,0 +1,124 @@
+name: Enriquecer Backfill Prensa Atlas
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'enriquecer_backfill_atlas.py'
+      - '.github/workflows/enriquecer-backfill-atlas.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atlas-press-backfill-enrichment
+  cancel-in-progress: true
+
+jobs:
+  enriquecer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Recuperar estados actuales de prensa
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin radar-prensa-entidades-state:refs/remotes/origin/radar-prensa-entidades-state
+          git fetch origin atlas-press-state:refs/remotes/origin/atlas-press-state
+          git show origin/radar-prensa-entidades-state:radar_prensa_entidades.json > radar_prensa_entidades.json
+          git show origin/atlas-press-state:atlas_prensa.json > atlas_prensa_previo.json
+          test -s radar_prensa_entidades.json
+          test -s atlas_prensa_previo.json
+
+      - name: Recuperar cuerpo editorial y construir input histórico
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile enriquecer_backfill_atlas.py monitor_uaf.py modulo_entidades.py exportar_atlas_prensa.py
+          python3 -u enriquecer_backfill_atlas.py \
+            --radar radar_prensa_entidades.json \
+            --salida datos_atlas_backfill_enriquecido.json \
+            --inicio 2025-10-05 \
+            --workers 8 | tee enriquecer_backfill_atlas.log
+          test -s datos_atlas_backfill_enriquecido.json
+
+      - name: Extraer entidades y menciones con el módulo del Monitor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -u modulo_entidades.py \
+            --entrada datos_atlas_backfill_enriquecido.json \
+            --salida datos_atlas_backfill_entidades.json | tee modulo_entidades_backfill.log
+          test -s datos_atlas_backfill_entidades.json
+
+      - name: Reintegrar entidades históricas al bridge de Atlas
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp atlas_prensa_previo.json atlas_prensa.json
+          python3 -u exportar_atlas_prensa.py \
+            --entrada datos_atlas_backfill_entidades.json \
+            --salida atlas_prensa.json \
+            --estado-previo atlas_prensa_previo.json \
+            --retencion-dias 730 | tee exportar_atlas_prensa_backfill.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('atlas_prensa.json').read_text(encoding='utf-8'))
+          names=[str(x.get('name') or '').casefold() for x in d.get('entities',[]) if isinstance(x,dict)]
+          pietra=any('pietra gold' in x for x in names)
+          print('Stats Atlas prensa:', d.get('stats'))
+          print('Pietra Gold detectada:', pietra)
+          assert isinstance(d.get('entities'), list)
+          assert isinstance(d.get('mentions'), list)
+          assert len(d.get('entities',[])) > 0
+          PY
+
+      - name: Publicar bridge histórico enriquecido para Atlas
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/atlas-enriched
+          cp atlas_prensa.json /tmp/atlas-enriched/
+          cat > /tmp/atlas-enriched/README.md <<'EOF'
+          # ATLAS · Prensa histórica enriquecida
+
+          Estado de prensa de ATLAS con backfill de 12 meses reprocesado por el módulo de entidades.
+          Cuando fue posible se recuperó el cuerpo editorial; en caso contrario se usó título + resumen.
+          Este proceso no modifica el Monitor UAF operativo, sus alertas, correos ni dashboard.
+          EOF
+          git checkout --orphan atlas-enriched-tmp
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/atlas-enriched/atlas_prensa.json ./
+          cp /tmp/atlas-enriched/README.md ./
+          git add atlas_prensa.json README.md
+          git config user.name "atlas-press-enrichment[bot]"
+          git config user.email "atlas-press-enrichment@users.noreply.github.com"
+          git commit -m "Reprocesar entidades del backfill histórico de Atlas"
+          git push origin HEAD:atlas-press-state --force
+
+      - name: Adjuntar diagnóstico si falla
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-enriquecimiento-backfill-atlas
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            enriquecer_backfill_atlas.log
+            modulo_entidades_backfill.log
+            exportar_atlas_prensa_backfill.log
+            datos_atlas_backfill_enriquecido.json
+            datos_atlas_backfill_entidades.json
