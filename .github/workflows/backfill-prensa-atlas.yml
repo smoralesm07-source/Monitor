@@ -1,0 +1,144 @@
+name: Backfill Prensa Atlas 12 meses
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backfill_prensa_atlas.py'
+      - '.github/workflows/backfill-prensa-atlas.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backfill-prensa-atlas
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Recuperar estado previo del radar
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git fetch origin radar-prensa-entidades-state:refs/remotes/origin/radar-prensa-entidades-state 2>/dev/null; then
+            git show origin/radar-prensa-entidades-state:radar_prensa_entidades.json > radar_prensa_entidades_previo.json || true
+          fi
+
+      - name: Ejecutar backfill histórico exclusivo para Atlas
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile radar_prensa_entidades.py backfill_prensa_atlas.py
+          ARGS=(
+            --salida radar_prensa_entidades.json
+            --inicio 2025-10-05
+            --fin 2026-10-05
+            --retencion-dias 730
+            --workers 6
+          )
+          if [[ -s radar_prensa_entidades_previo.json ]]; then
+            ARGS+=(--estado-previo radar_prensa_entidades_previo.json)
+          fi
+          python3 -u backfill_prensa_atlas.py "${ARGS[@]}" | tee backfill_prensa_atlas.log
+          test -s radar_prensa_entidades.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('radar_prensa_entidades.json').read_text(encoding='utf-8'))
+          b=d.get('backfill') or {}
+          assert b.get('start') == '2025-10-05'
+          assert b.get('queries_ok',0) > 0
+          assert isinstance(d.get('articles'), list)
+          print('Backfill:', b)
+          print('Artículos totales radar:', len(d['articles']))
+          PY
+
+      - name: Publicar estado ampliado del radar
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/radar-backfill
+          cp radar_prensa_entidades.json /tmp/radar-backfill/
+          cat > /tmp/radar-backfill/README.md <<'EOF'
+          # ATLAS · Radar Prensa Entidades
+
+          Estado ampliado con backfill histórico desde 2025-10-05 hasta 2026-10-05,
+          exclusivamente para ampliar la cobertura de prensa de ATLAS.
+
+          Este proceso no modifica el Monitor UAF, sus alertas, correos ni dashboard.
+          Una coincidencia textual no acredita identidad, participación ni responsabilidad.
+          EOF
+          git checkout --orphan radar-prensa-backfill-tmp
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/radar-backfill/radar_prensa_entidades.json ./
+          cp /tmp/radar-backfill/README.md ./
+          git add radar_prensa_entidades.json README.md
+          git config user.name "atlas-press-backfill[bot]"
+          git config user.email "atlas-press-backfill@users.noreply.github.com"
+          git commit -m "Backfill prensa Atlas 2025-10-05 a 2026-10-05"
+          git push origin HEAD:radar-prensa-entidades-state --force
+
+      - name: Integrar inmediatamente el backfill en Atlas
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main:refs/remotes/origin/main
+          git fetch origin atlas-press-state:refs/remotes/origin/atlas-press-state
+          git show origin/atlas-press-state:atlas_prensa.json > atlas_prensa.json
+          cp /tmp/radar-backfill/radar_prensa_entidades.json radar_prensa_entidades.json
+          git show origin/main:fusionar_radar_entidades_atlas.py > fusionar_radar_entidades_atlas.py
+          python3 -m py_compile fusionar_radar_entidades_atlas.py
+          python3 -u fusionar_radar_entidades_atlas.py \
+            --atlas atlas_prensa.json \
+            --radar radar_prensa_entidades.json | tee fusion_backfill_atlas.log
+          test -s atlas_prensa.json
+
+      - name: Publicar estado combinado de Atlas
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/atlas-backfill
+          cp atlas_prensa.json /tmp/atlas-backfill/
+          cat > /tmp/atlas-backfill/README.md <<'EOF'
+          # ATLAS · Prensa histórica combinada
+
+          Bridge de prensa de ATLAS ampliado con backfill histórico de 12 meses.
+          El Monitor UAF permanece separado y sin modificaciones.
+          EOF
+          git checkout --orphan atlas-backfill-tmp
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/atlas-backfill/atlas_prensa.json ./
+          cp /tmp/atlas-backfill/README.md ./
+          git add atlas_prensa.json README.md
+          git config user.name "atlas-press-backfill[bot]"
+          git config user.email "atlas-press-backfill@users.noreply.github.com"
+          git commit -m "Integrar backfill prensa de 12 meses en Atlas"
+          git push origin HEAD:atlas-press-state --force
+
+      - name: Adjuntar diagnóstico si falla
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-backfill-prensa-atlas
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            backfill_prensa_atlas.log
+            fusion_backfill_atlas.log
+            radar_prensa_entidades.json
+            atlas_prensa.json
